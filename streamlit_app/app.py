@@ -1,4 +1,4 @@
-import streamlit as st
+/import streamlit as st
 import os
 import pathlib
 current_dir = pathlib.Path(__file__).parent
@@ -39,7 +39,7 @@ def login():
     
     with col2:
         # Centered logo and title
-        st.image("current_dir / logo.png", width=250)
+        st.image("assets/logo.png", width=250)
         st.title("Clinexa")
         st.caption("Beyond Data. Beyond Care.")
         
