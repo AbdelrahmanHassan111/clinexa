@@ -1,3 +1,4 @@
+plotly
 streamlit>=1.30.0
 pandas>=2.1.0
 numpy>=1.25
