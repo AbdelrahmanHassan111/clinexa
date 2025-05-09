@@ -1,0 +1,4 @@
+Your application is available at: https://0343-197-133-246-176.ngrok-free.app
+Generated on: 2025-05-08 20:48:28
+
+Note: This URL will change if you restart ngrok.

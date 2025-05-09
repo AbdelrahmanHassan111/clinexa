@@ -1,0 +1,2946 @@
+import streamlit as st
+import pandas as pd
+import numpy as np
+import joblib
+import mysql.connector
+from datetime import datetime, timedelta, time
+import time as time_module
+import json
+import google.generativeai as genai
+from streamlit_chat import message
+import matplotlib.pyplot as plt
+import seaborn as sns
+from io import BytesIO
+import os
+import cv2
+from PIL import Image
+from mri_models import process_mri_with_cnn, process_mri_with_swin, apply_colormap_to_heatmap, extract_roi_measurements
+import random
+
+# Gemini API setup
+API_KEY = "AIzaSyC1R-VeIuMePDZt_Z1WLluHkoq2tjWsVz8"
+genai.configure(api_key=API_KEY)
+model = genai.GenerativeModel("gemini-2.5-pro-exp-03-25")
+
+# Load the ML model - use relative path
+model_path = "model\\XGBoost_grid_optimized.joblib"
+try:
+    # Check if model file exists
+    if os.path.exists(model_path):
+        clf = joblib.load(model_path)
+    else:
+        st.warning(f"Model file not found at {model_path}. Using placeholder model for demonstration.")
+        # Create a dummy classifier for demonstration purposes
+        from sklearn.ensemble import RandomForestClassifier
+        clf = RandomForestClassifier(n_estimators=10)
+        # Set some dummy feature importances for visualization
+        import numpy as np
+        feature_names = get_feature_columns()
+        clf.feature_importances_ = np.random.random(len(feature_names))
+        clf.classes_ = np.array([0, 1, 2])  # Cognitively Normal, MCI, AD
+except Exception as e:
+    st.error(f"Error loading model: {e}")
+    clf = None
+
+# Database connection parameters
+DB_CONFIG = {
+        "host": "localhost",
+    "user": "root",
+    "password": "root",
+    "database": "smart_clinic"
+}
+
+# Class mapping for Alzheimer's predictions
+ALZHEIMER_CLASS_MAPPING = {
+    0: "Cognitively Normal",
+    1: "Mild Cognitive Impairment",
+    2: "Alzheimer's Disease (AD)"
+}
+
+# Direct DB Connection
+def get_db_connection():
+    """Create a direct database connection."""
+    try:
+        connection = mysql.connector.connect(**DB_CONFIG)
+        return connection
+    except mysql.connector.Error as e:
+        st.error(f"Database connection error: {e}")
+        return None
+
+# Get the feature names required by the model
+def get_feature_columns():
+    """Return ordered list of feature columns required by the model"""
+    return [
+        "CDRSB", "mPACCdigit", "MMSE", "LDELTOTAL", "mPACCtrailsB", 
+        "EcogSPPlan", "RAVLT_immediate", "FAQ", "EcogPtTotal", "Entorhinal", 
+        "PTEDUCAT", "Ventricles", "Fusiform", "EcogSPOrgan", "APOE4", 
+        "EcogPtLang", "FDG", "MidTemp", "TRABSCOR", "EcogSPDivatt", 
+        "ADAS11", "EcogPtVisspat", "AGE", "ADAS13", "EcogSPMem", 
+        "EcogPtOrgan", "ICV", "Hippocampus", "EcogSPVisspat", "MOCA", 
+        "WholeBrain", "PTRACCAT", "RAVLT_learning", "DIGITSCOR", 
+        "PTGENDER", "EcogSPTotal", "RAVLT_perc_forgetting", "ABETA", 
+        "ADASQ4", "EcogSPLang", "EcogPtMem", "EcogPtDivatt", "RAVLT_forgetting"
+    ]
+
+# Get feature descriptions for tooltips
+def get_feature_descriptions():
+    return {
+        "CDRSB": "Clinical Dementia Rating Sum of Boxes (Scale: 0-18, higher values indicate greater impairment)",
+        "mPACCdigit": "Modified Preclinical Alzheimer's Cognitive Composite with Digit Symbol Substitution",
+        "MMSE": "Mini-Mental State Examination (Scale: 0-30, higher is better)",
+        "LDELTOTAL": "Logical Memory delayed recall total score",
+        "mPACCtrailsB": "Modified Preclinical Alzheimer's Cognitive Composite with Trail Making Test Part B",
+        "EcogSPPlan": "Study Partner Everyday Cognition Planning Score",
+        "RAVLT_immediate": "Rey Auditory Verbal Learning Test - Immediate Recall score",
+        "FAQ": "Functional Activities Questionnaire (Scale: 0-30, higher values indicate greater impairment)",
+        "EcogPtTotal": "Patient Everyday Cognition Total Score",
+        "Entorhinal": "Entorhinal cortex volume (mm³)",
+        "PTEDUCAT": "Years of education",
+        "Ventricles": "Ventricular volume (mm³)",
+        "Fusiform": "Fusiform gyrus volume (mm³)",
+        "EcogSPOrgan": "Study Partner Everyday Cognition Organization Score",
+        "APOE4": "Number of APOE e4 alleles (0, 1, or 2)",
+        "EcogPtLang": "Patient Everyday Cognition Language Score",
+        "FDG": "Fluorodeoxyglucose (18F) PET measurement",
+        "MidTemp": "Middle temporal gyrus volume (mm³)",
+        "TRABSCOR": "Trail Making Test Part B score (seconds)",
+        "EcogSPDivatt": "Study Partner Everyday Cognition Divided Attention Score",
+        "ADAS11": "Alzheimer's Disease Assessment Scale-Cognitive Subscale (11-item version)",
+        "EcogPtVisspat": "Patient Everyday Cognition Visuospatial Score",
+        "AGE": "Age in years",
+        "ADAS13": "Alzheimer's Disease Assessment Scale-Cognitive Subscale (13-item version)",
+        "EcogSPMem": "Study Partner Everyday Cognition Memory Score",
+        "EcogPtOrgan": "Patient Everyday Cognition Organization Score",
+        "ICV": "Intracranial volume (mm³)",
+        "Hippocampus": "Hippocampal volume (mm³)",
+        "EcogSPVisspat": "Study Partner Everyday Cognition Visuospatial Score",
+        "MOCA": "Montreal Cognitive Assessment (Scale: 0-30, higher is better)",
+        "WholeBrain": "Whole brain volume (mm³)",
+        "PTRACCAT": "Participant race category (1=White, 2=Black, 3=Asian, 4=More than one, 5=Other)",
+        "RAVLT_learning": "Rey Auditory Verbal Learning Test - Learning score",
+        "DIGITSCOR": "Digest Symbol Substitution Test score",
+        "PTGENDER": "Participant gender (0=Male, 1=Female)",
+        "EcogSPTotal": "Study Partner Everyday Cognition Total Score",
+        "RAVLT_perc_forgetting": "Rey Auditory Verbal Learning Test - Percent Forgetting",
+        "ABETA": "Amyloid-β levels (pg/mL)",
+        "ADASQ4": "ADAS-Cog Word Finding Difficulty score",
+        "EcogSPLang": "Study Partner Everyday Cognition Language Score",
+        "EcogPtMem": "Patient Everyday Cognition Memory Score",
+        "EcogPtDivatt": "Patient Everyday Cognition Divided Attention Score",
+        "RAVLT_forgetting": "Rey Auditory Verbal Learning Test - Forgetting score",
+        "EcogPtPlan": "Patient Everyday Cognition Planning Score",
+        "PTMARRY": "Marital status (1=Married, 2=Widowed, 3=Divorced, 4=Never married, 5=Unknown)",
+        "PTETHCAT": "Ethnicity category (1=Hispanic/Latino, 2=Not Hispanic/Latino, 3=Unknown)",
+        "PTAU": "Phosphorylated tau (p-tau) levels (pg/mL)",
+        "TAU": "Total tau protein levels (pg/mL)"
+    }
+
+# Get existing patient features or None
+def get_patient_features(patient_id):
+    conn = get_db_connection()
+    if not conn:
+        return None
+    
+    cursor = conn.cursor(dictionary=True)
+    try:
+        cursor.execute("SELECT * FROM alzheimer_features WHERE patient_id = %s", (patient_id,))
+        features = cursor.fetchone()
+        cursor.close()
+        conn.close()
+        return features
+    except mysql.connector.Error as e:
+        st.error(f"Error fetching patient features: {e}")
+        cursor.close()
+        conn.close()
+        return None
+
+# Prediction function
+def predict_alzheimer(input_data):
+    if clf is None:
+        return "Error", 0
+    
+    try:
+        # Get feature columns in the correct order
+        feature_columns = get_feature_columns()
+        
+        # Create a properly ordered feature array with exactly 43 features
+        feature_array = np.zeros(len(feature_columns))
+        for i, feature in enumerate(feature_columns):
+            if feature in input_data:
+                feature_array[i] = input_data[feature]
+        
+        # Log the features being used for prediction
+        st.session_state.last_feature_array = feature_array
+                
+        # Make prediction using the model
+        prediction = clf.predict([feature_array])[0]
+        
+        # Handle different model types
+        if hasattr(clf, 'predict_proba'):
+            probabilities = clf.predict_proba([feature_array])[0]
+        else:
+            # Create fake probabilities for dummy model
+            probabilities = np.zeros(3)
+            probabilities[prediction] = 0.8  # High confidence for predicted class
+            remaining = 0.2 / (len(probabilities) - 1)
+            for i in range(len(probabilities)):
+                if i != prediction:
+                    probabilities[i] = remaining
+        
+        confidence = max(probabilities)
+        
+        # Store all probabilities in session state for visualization
+        st.session_state.last_probabilities = probabilities
+        st.session_state.last_prediction_classes = clf.classes_
+        
+        # Map integer prediction to string prediction for backwards compatibility
+        pred_mapping = {0: "Nondemented", 1: "Converted", 2: "Demented"}
+        if isinstance(prediction, (int, np.integer)):
+            prediction = pred_mapping.get(prediction, "Unknown")
+        
+        return prediction, confidence
+    except Exception as e:
+        st.error(f"Error making prediction: {e}")
+        return "Error", 0
+
+# Store features in database
+def store_features(patient_id, feature_data):
+    conn = get_db_connection()
+    if not conn:
+        return False
+    
+    cursor = conn.cursor()
+    try:
+        # Check if patient already has features
+        cursor.execute("SELECT feature_id FROM alzheimer_features WHERE patient_id = %s", (patient_id,))
+        existing = cursor.fetchone()
+        
+        if existing:
+            # Update existing features
+            set_clause = ", ".join([f"{key} = %s" for key in feature_data.keys()])
+            values = list(feature_data.values())
+            values.append(patient_id)  # For WHERE clause
+            
+            cursor.execute(f"UPDATE alzheimer_features SET {set_clause} WHERE patient_id = %s", values)
+            conn.commit()
+            cursor.close()
+            conn.close()
+            return True
+        else:
+            # Insert new features
+            columns = ", ".join(["patient_id"] + list(feature_data.keys()))
+            placeholders = ", ".join(["%s"] * (len(feature_data) + 1))
+            values = [patient_id] + list(feature_data.values())
+            
+            cursor.execute(f"INSERT INTO alzheimer_features ({columns}) VALUES ({placeholders})", values)
+            conn.commit()
+            cursor.close()
+            conn.close()
+            return True
+    except mysql.connector.Error as e:
+        st.error(f"Error storing features: {e}")
+        cursor.close()
+        conn.close()
+        return False
+
+# Store prediction in database
+def store_prediction(patient_id, features, prediction, confidence):
+    conn = get_db_connection()
+    if not conn:
+        return False
+    
+    cursor = conn.cursor()
+    try:
+        now = datetime.now()
+        today = now.date()
+        
+        # Convert any numpy values to standard Python types
+        converted_features = {}
+        for key, value in features.items():
+            if hasattr(value, "dtype"):  # Check if it's a numpy type
+                converted_features[key] = value.item()  # Convert numpy value to Python scalar
+            else:
+                converted_features[key] = value
+                
+        features_json = json.dumps(converted_features)
+        
+        # Make sure prediction and confidence are also standard Python types
+        prediction = str(prediction)
+        confidence = float(confidence)
+        
+        # Check if a prediction already exists for this patient today
+        cursor.execute("""
+            SELECT analysis_id FROM alzheimers_analysis 
+            WHERE patient_id = %s AND DATE(analyzed_at) = %s
+        """, (patient_id, today))
+        
+        existing_analysis = cursor.fetchone()
+        
+        # Make sure to consume all results
+        while cursor.fetchone() is not None:
+            pass
+        
+        if existing_analysis:
+            # Update existing prediction
+            analysis_id = existing_analysis[0]
+            cursor.execute("""
+                UPDATE alzheimers_analysis 
+                SET input_features = %s, prediction = %s, confidence_score = %s, analyzed_at = %s
+                WHERE analysis_id = %s
+            """, (features_json, prediction, confidence, now, analysis_id))
+            
+            conn.commit()
+            st.info(f"Updated existing prediction from today (ID: {analysis_id}).")
+            return analysis_id
+        else:
+            # Insert new prediction
+            cursor.execute("""
+                INSERT INTO alzheimers_analysis 
+                (patient_id, input_features, prediction, confidence_score, analyzed_at)
+                VALUES (%s, %s, %s, %s, %s)
+            """, (patient_id, features_json, prediction, confidence, now))
+            
+            conn.commit()
+            analysis_id = cursor.lastrowid  # Get the ID of the newly inserted analysis
+            return analysis_id
+    except mysql.connector.Error as e:
+        st.error(f"Error storing prediction: {e}")
+        return False
+    finally:
+        # Always close cursor and connection in finally block
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+# Get patient medical records
+def get_patient_records(patient_id):
+    conn = get_db_connection()
+    if not conn:
+        return []
+    
+    cursor = conn.cursor(dictionary=True)
+    try:
+        cursor.execute("""
+            SELECT record_id, diagnosis, visit_date, notes
+            FROM medical_records
+            WHERE patient_id = %s
+            ORDER BY visit_date DESC
+        """, (patient_id,))
+        
+        records = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        return records
+    except mysql.connector.Error as e:
+        st.error(f"Error fetching medical records: {e}")
+        cursor.close()
+        conn.close()
+        return []
+
+# Get patient personal information
+def get_patient_info(patient_id):
+    conn = get_db_connection()
+    if not conn:
+        return None
+    
+    cursor = conn.cursor(dictionary=True)
+    try:
+        cursor.execute("""
+            SELECT * FROM patients WHERE patient_id = %s
+        """, (patient_id,))
+        
+        patient_info = cursor.fetchone()
+        cursor.close()
+        conn.close()
+        return patient_info
+    except mysql.connector.Error as e:
+        st.error(f"Error fetching patient info: {e}")
+        cursor.close()
+        conn.close()
+        return None
+
+# Add medical record for patient
+def add_medical_record(patient_id, diagnosis, notes):
+    conn = get_db_connection()
+    if not conn:
+        return False
+    
+    cursor = conn.cursor()
+    try:
+        visit_date = datetime.now().date()
+        
+        cursor.execute("""
+            INSERT INTO medical_records (patient_id, diagnosis, visit_date, notes)
+            VALUES (%s, %s, %s, %s)
+        """, (patient_id, diagnosis, visit_date, notes))
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        return True
+    except mysql.connector.Error as e:
+        st.error(f"Error adding medical record: {e}")
+        cursor.close()
+        conn.close()
+        return False
+
+# Get previous analyses for a patient
+def get_patient_analyses(patient_id):
+    conn = get_db_connection()
+    if not conn:
+        return []
+    
+    cursor = conn.cursor(dictionary=True)
+    try:
+        cursor.execute("""
+            SELECT analysis_id, prediction, confidence_score, analyzed_at
+            FROM alzheimers_analysis
+            WHERE patient_id = %s
+            ORDER BY analyzed_at DESC
+        """, (patient_id,))
+        
+        analyses = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        return analyses
+    except mysql.connector.Error as e:
+        st.error(f"Error fetching analyses: {e}")
+        cursor.close()
+        conn.close()
+        return []
+
+# Save chat message
+def save_chat_message(patient_id, doctor_id, message, sender):
+    conn = get_db_connection()
+    if not conn:
+        return False
+    
+    cursor = conn.cursor()
+    try:
+        # First check if the doctor_id exists in the doctors table
+        cursor.execute("SELECT COUNT(*) FROM doctors WHERE doctor_id = %s", (doctor_id,))
+        doctor_exists = cursor.fetchone()[0] > 0
+        
+        # If doctor does not exist, we need to create a doctor entry using the user's ID
+        if not doctor_exists:
+            # Get user info
+            cursor.execute("SELECT username FROM users WHERE id = %s", (doctor_id,))
+            user_result = cursor.fetchone()
+            
+            if user_result:
+                username = user_result[0]
+                # Create a doctor entry with the same ID as the user
+                try:
+                    cursor.execute("""
+                        INSERT INTO doctors (doctor_id, full_name, specialization, email, phone_number)
+                        VALUES (%s, %s, %s, %s, %s)
+                    """, (doctor_id, username, "General Practitioner", f"{username}@clinic.com", "N/A"))
+                    conn.commit()
+                    st.info(f"Created doctor profile for user {username}")
+                except mysql.connector.Error:
+                    # If we can't create a doctor with the same ID, return error
+                    st.error("Cannot save message: Doctor profile does not exist")
+                    cursor.close()
+                    conn.close()
+                    return False
+            else:
+                st.error("User not found")
+                cursor.close()
+                conn.close()
+                return False
+                
+        # Now we can insert the chat message
+        now = datetime.now()
+        
+        # Convert sender from 'Doctor'/'Assistant' to 'doctor'/'model' for database
+        db_sender = 'doctor' if sender == 'Doctor' else 'model'
+        
+        cursor.execute("""
+            INSERT INTO chat_logs (patient_id, doctor_id, message, sender, timestamp)
+            VALUES (%s, %s, %s, %s, %s)
+        """, (patient_id, doctor_id, message, db_sender, now))
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        return True
+    except mysql.connector.Error as e:
+        st.error(f"Error saving chat message: {e}")
+        cursor.close()
+        conn.close()
+        return False
+
+# Get previous chat history
+def get_chat_history(patient_id, doctor_id):
+    conn = get_db_connection()
+    if not conn:
+        return []
+    
+    cursor = conn.cursor(dictionary=True)
+    try:
+        cursor.execute("""
+            SELECT message, sender, timestamp
+            FROM chat_logs
+            WHERE patient_id = %s AND doctor_id = %s
+            ORDER BY timestamp ASC
+        """, (patient_id, doctor_id))
+        
+        chat_logs = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        
+        # Convert to format expected by session state
+        history = []
+        for log in chat_logs:
+            # Convert from database 'doctor'/'model' to UI 'You'/'Assistant'
+            sender_name = "You" if log["sender"] == "doctor" else "Assistant"
+            history.append((sender_name, log["message"]))
+        
+        return history
+    except mysql.connector.Error as e:
+        st.error(f"Error fetching chat history: {e}")
+        cursor.close()
+        conn.close()
+        return []
+
+# Generate plot of feature importance
+def generate_feature_importance_plot():
+    if not hasattr(clf, 'feature_importances_'):
+        return None
+    
+    features = get_feature_columns()
+    importances = clf.feature_importances_
+    
+    # Sort features by importance
+    indices = np.argsort(importances)[::-1]
+    
+    # Take top 10 most important features (reduced from 15)
+    top_indices = indices[:10]
+    top_features = [features[i] for i in top_indices]
+    top_importances = [importances[i] for i in top_indices]
+    
+    # Create plot with minimal size
+    plt.figure(figsize=(1.5, 0.8), dpi=150)
+    plt.title('Top 10 Features', fontsize=4)
+    plt.barh(range(len(top_indices)), top_importances, align='center', height=0.4)
+    plt.yticks(range(len(top_indices)), top_features, fontsize=2)
+    plt.xticks(fontsize=2)
+    plt.xlabel('Importance', fontsize=3)
+    
+    # Save plot to buffer
+    buf = BytesIO()
+    plt.savefig(buf, format='png', bbox_inches='tight', dpi=150)
+    buf.seek(0)
+    plt.close()
+    
+    return buf
+
+# Doctor panel main content
+def doctor_panel():
+    # Initialize doctor ID from session state
+    doctor_id = st.session_state.get("user_id", 1)
+    
+    # Sidebar menu
+    with st.sidebar:
+        st.title("🧑‍⚕️ Doctor Dashboard")
+        
+        # Navigation
+        page = st.radio("Navigation", [
+            "👨‍👩‍👧‍👦 Patient Management",
+            "🧠 Alzheimer's Analysis",
+            "📋 Medical Records",
+            "💬 AI Assistant",
+            "📊 Analytics"
+        ])
+        
+        # Logout button
+        if st.button("🚪 Sign Out"):
+            st.session_state.clear()
+            st.success("You have been signed out.")
+            st.rerun()
+    
+    # Main content area
+    conn = get_db_connection()
+    if not conn:
+        st.error("Could not connect to database")
+        return
+    
+    cursor = conn.cursor()
+
+    # Patient selection
+    st.subheader("Patient Selection")
+    col1, col2 = st.columns([3, 1])
+    
+    with col1:
+        search_term = st.text_input("🔍 Search Patient by Name or ID")
+    
+    with col2:
+        add_new = st.button("➕ Add New Patient")
+    
+    if add_new:
+        st.session_state.show_add_patient = True
+    
+    # Display add patient form if flag is set
+    if st.session_state.get("show_add_patient", False):
+        with st.expander("Add New Patient", expanded=True):
+            added = add_patient()
+            if added:
+                st.session_state.show_add_patient = False
+                st.rerun()
+            
+            if st.button("Cancel"):
+                st.session_state.show_add_patient = False
+                st.rerun()
+    
+    # Get patient list based on search term
+    if search_term:
+        try:
+            cursor.execute("""
+                SELECT patient_id, full_name, birth_date, gender, contact_info FROM patients
+                WHERE full_name LIKE %s OR patient_id LIKE %s
+            """, (f"%{search_term}%", f"%{search_term}%"))
+            patients = cursor.fetchall()
+        except mysql.connector.Error as e:
+            st.error(f"Error searching patients: {e}")
+            patients = []
+    else:
+        try:
+            cursor.execute("SELECT patient_id, full_name, birth_date, gender, contact_info FROM patients ORDER BY full_name")
+            patients = cursor.fetchall()
+        except mysql.connector.Error as e:
+            st.error(f"Error fetching patients: {e}")
+            patients = []
+
+    if not patients:
+        st.warning("No patients found. Please add patients first.")
+        cursor.close()
+        conn.close()
+        return
+    
+    # Create patient selection cards
+    st.markdown("### Select a Patient to Continue")
+    patient_cols = st.columns(3)
+    
+    patient_dict = {}
+    for i, (pid, name, birthdate, gender, contact) in enumerate(patients):
+        col = patient_cols[i % 3]
+        with col:
+            age = datetime.now().year - birthdate.year if birthdate else "N/A"
+            card = f"""
+            <div style="padding: 10px; border-radius: 5px; border: 1px solid #ddd; margin: 5px 0;">
+                <h4>{name}</h4>
+                <p>ID: {pid} | Age: {age} | Gender: {gender}</p>
+                <p>Contact: {contact or 'N/A'}</p>
+            </div>
+            """
+            st.markdown(card, unsafe_allow_html=True)
+            patient_dict[name] = pid
+            if st.button(f"Select {name}", key=f"btn_{pid}"):
+                st.session_state.selected_patient = pid
+                st.session_state.selected_patient_name = name
+                st.rerun()
+    
+    # If no patient is selected, stop here
+    if "selected_patient" not in st.session_state:
+        cursor.close()
+        conn.close()
+        return
+    
+    # Get selected patient ID and information
+    patient_id = st.session_state.selected_patient
+    patient_info = get_patient_info(patient_id)
+    
+    if not patient_info:
+        st.error("Error retrieving patient information.")
+        return
+    
+    # Display patient header
+    st.markdown(f"""
+    <div style="background-color: #f0f2f6; padding: 15px; border-radius: 5px; margin-bottom: 20px;">
+        <h2>{patient_info['full_name']}</h2>
+        <p>Patient ID: {patient_id} | Date of Birth: {patient_info['birth_date']} | Gender: {patient_info['gender']}</p>
+        <p>Contact: {patient_info['contact_info'] or 'N/A'} | Address: {patient_info['address'] or 'N/A'}</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Show different content based on selected page
+    if page == "👨‍👩‍👧‍👦 Patient Management":
+        display_patient_management(patient_id, patient_info)
+    elif page == "🧠 Alzheimer's Analysis":
+        display_alzheimer_analysis(patient_id, patient_info)
+    elif page == "📋 Medical Records":
+        display_medical_records(patient_id, patient_info)
+    elif page == "💬 AI Assistant":
+        display_ai_assistant(patient_id, patient_info, doctor_id)
+    elif page == "📊 Analytics":
+        display_analytics(patient_id, patient_info)
+    
+    # Close database connection
+    cursor.close()
+    conn.close()
+
+# Patient management functions
+def add_patient():
+    st.subheader("Add New Patient")
+    
+    # Patient form
+    with st.form("patient_form"):
+        full_name = st.text_input("Full Name")
+        date_of_birth = st.date_input("Date of Birth")
+        gender = st.selectbox("Gender", ["Male", "Female", "Other"])
+        contact_number = st.text_input("Contact Number")
+        email = st.text_input("Email Address")
+        address = st.text_area("Address")
+        
+        # Form submission
+        submit = st.form_submit_button("Register Patient")
+        
+        if submit:
+            if full_name and date_of_birth and gender:
+                # Connect to database
+                conn = get_db_connection()
+                if not conn:
+                    st.error("Could not connect to database")
+                    return
+                
+                cursor = conn.cursor()
+                try:
+                    # Insert patient data
+                    cursor.execute("""
+                        INSERT INTO patients 
+                        (full_name, birth_date, gender, contact_info, email, address, created_at)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """, (full_name, date_of_birth, gender, contact_number, email, address, datetime.now()))
+                    
+                    conn.commit()
+                    st.success(f"✅ Patient {full_name} registered successfully!")
+                    
+                    # Get the newly created patient ID for redirecting
+                    patient_id = cursor.lastrowid
+                    if patient_id:
+                        st.session_state.selected_patient = patient_id
+                        st.session_state.selected_patient_name = full_name
+                    
+                    cursor.close()
+                    conn.close()
+                    return True
+                except mysql.connector.Error as e:
+                    st.error(f"Error registering patient: {e}")
+                    cursor.close()
+                    conn.close()
+                    return False
+            else:
+                st.warning("Please fill in all required fields (Name, Date of Birth, Gender)")
+                return False
+    
+    return False
+
+def view_patients():
+    st.subheader("View All Patients")
+    
+    # Connect to database
+    conn = get_db_connection()
+    if not conn:
+        st.error("Could not connect to database")
+        return
+    
+    cursor = conn.cursor(dictionary=True)
+    try:
+        # Fetch all patients
+        cursor.execute("""
+            SELECT patient_id, full_name, birth_date, gender, contact_info, 
+                   email, created_at 
+            FROM patients
+            ORDER BY created_at DESC
+        """)
+        
+        patients = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        
+        if not patients:
+            st.info("No patients registered yet.")
+            return
+        
+        # Convert to DataFrame for display
+        df = pd.DataFrame(patients)
+        
+        # Calculate age
+        df['age'] = df['birth_date'].apply(lambda x: datetime.now().year - x.year if x else 0)
+        
+        # Display DataFrame as a table
+        st.dataframe(df, use_container_width=True)
+        
+        # Optionally, allow users to filter or search by name or other details
+        search_term = st.text_input("Search Patients by Name")
+        if search_term:
+            df_filtered = df[df['full_name'].str.contains(search_term, case=False, na=False)]
+            if df_filtered.empty:
+                st.info(f"No patients found with name: {search_term}")
+            else:
+                st.dataframe(df_filtered, use_container_width=True)
+        
+        # Optionally, add a button to select a patient
+        patient_id = st.number_input("Enter Patient ID to Select", min_value=1, step=1)
+        if patient_id and patient_id in df['patient_id'].values:
+            patient_info = df[df['patient_id'] == patient_id].iloc[0]
+            if st.button(f"Select Patient: {patient_info['full_name']}"):
+                st.session_state.selected_patient = patient_id
+                st.session_state.selected_patient_name = patient_info['full_name']
+                st.rerun()
+                
+    except Exception as e:
+        st.error(f"An error occurred while fetching patients: {e}")
+        cursor.close()
+        conn.close()
+
+# Display patient management page
+def display_patient_management(patient_id, patient_info):
+    st.header("Patient Management")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("Patient Details")
+        st.markdown(f"""
+        - **Full Name**: {patient_info['full_name']}
+        - **Birth Date**: {patient_info['birth_date']}
+        - **Age**: {datetime.now().year - patient_info['birth_date'].year}
+        - **Gender**: {patient_info['gender']}
+        - **Contact**: {patient_info['contact_info'] or 'Not provided'}
+        - **Address**: {patient_info['address'] or 'Not provided'}
+        - **Registration Date**: {patient_info['created_at']}
+        """)
+        
+        # Edit patient information
+        with st.expander("Edit Patient Information"):
+            with st.form("edit_patient_form"):
+                full_name = st.text_input("Full Name", value=patient_info['full_name'])
+                birth_date = st.date_input("Birth Date", value=patient_info['birth_date'])
+                gender = st.selectbox("Gender", ["Male", "Female", "Other"], index=["Male", "Female", "Other"].index(patient_info['gender']))
+                contact = st.text_input("Contact Information", value=patient_info['contact_info'] or "")
+                address = st.text_area("Address", value=patient_info['address'] or "")
+                
+                submit = st.form_submit_button("Update Patient Information")
+                
+                if submit:
+                    conn = get_db_connection()
+                    if conn:
+                        cursor = conn.cursor()
+                        try:
+                            cursor.execute("""
+                                UPDATE patients
+                                SET full_name = %s, birth_date = %s, gender = %s, 
+                                    contact_info = %s, address = %s
+                                WHERE patient_id = %s
+                            """, (full_name, birth_date, gender, contact, address, patient_id))
+                            
+                            conn.commit()
+                            st.success("✅ Patient information updated successfully.")
+                            
+                            # Update session state
+                            st.session_state.selected_patient_name = full_name
+                            
+                            # Refresh the page
+                            time_module.sleep(1)
+                            st.rerun()
+                        except mysql.connector.Error as e:
+                            st.error(f"Error updating patient information: {e}")
+                        finally:
+                            cursor.close()
+                            conn.close()
+    
+    with col2:
+        # Summary statistics
+        st.subheader("Patient Summary")
+        
+        conn = get_db_connection()
+        if conn:
+            cursor = conn.cursor()
+            
+            # Count medical records
+            cursor.execute("SELECT COUNT(*) FROM medical_records WHERE patient_id = %s", (patient_id,))
+            record_count = cursor.fetchone()[0]
+            
+            # Count Alzheimer's analyses
+            cursor.execute("SELECT COUNT(*) FROM alzheimers_analysis WHERE patient_id = %s", (patient_id,))
+            analysis_count = cursor.fetchone()[0]
+            
+            # Get most recent analysis
+            cursor.execute("""
+                SELECT prediction, confidence_score, analyzed_at 
+                FROM alzheimers_analysis 
+                WHERE patient_id = %s 
+                ORDER BY analyzed_at DESC LIMIT 1
+            """, (patient_id,))
+            latest_analysis = cursor.fetchone()
+            
+            # Count appointments
+            cursor.execute("""
+                SELECT COUNT(*) FROM appointments 
+                WHERE patient_id = %s
+            """, (patient_id,))
+            appointment_count = cursor.fetchone()[0]
+            
+            # Display stats
+            col_a, col_b = st.columns(2)
+            with col_a:
+                st.metric("Medical Records", record_count)
+                st.metric("Appointments", appointment_count)
+            
+            with col_b:
+                st.metric("Alzheimer's Analyses", analysis_count)
+                if latest_analysis:
+                    status_color = {
+                        "Demented": "🔴",
+                        "Nondemented": "🟢",
+                        "Converted": "🟠"
+                    }.get(latest_analysis[0], "⚪")
+                    
+                    st.metric(
+                        "Latest Status", 
+                        f"{status_color} {latest_analysis[0]}", 
+                        f"Confidence: {latest_analysis[1]:.1%}"
+                    )
+            
+            cursor.close()
+            conn.close()
+        
+        # Schedule appointment
+        st.subheader("Schedule Appointment")
+        with st.form("schedule_appointment"):
+            # Get list of doctors
+            conn = get_db_connection()
+            doctors = []
+            if conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT doctor_id, full_name FROM doctors ORDER BY full_name")
+                doctors = cursor.fetchall()
+                cursor.close()
+                conn.close()
+            
+            # Form fields
+            if doctors:
+                doctor_options = {doc[1]: doc[0] for doc in doctors}
+                selected_doctor = st.selectbox("Select Doctor", list(doctor_options.keys()))
+                doctor_id = doctor_options[selected_doctor]
+            else:
+                doctor_id = st.session_state.get("user_id", 1)
+                st.info("No other doctors available in system.")
+            
+            appt_date = st.date_input("Appointment Date", value=datetime.now().date() + timedelta(days=1))
+            appt_time = st.time_input("Appointment Time", value=time(9, 0))
+            appt_datetime = datetime.combine(appt_date, appt_time)
+            reason = st.text_area("Reason for Visit")
+            
+            submit_appt = st.form_submit_button("Schedule Appointment")
+            if submit_appt:
+                if reason:
+                    conn = get_db_connection()
+                    if conn:
+                        cursor = conn.cursor()
+                        try:
+                            cursor.execute("""
+                                INSERT INTO appointments
+                                (patient_id, doctor_id, appointment_date, reason, status)
+                                VALUES (%s, %s, %s, %s, %s)
+                            """, (patient_id, doctor_id, appt_datetime, reason, "Scheduled"))
+                            
+                            conn.commit()
+                            st.success("✅ Appointment scheduled successfully.")
+                            time_module.sleep(1)
+                            st.rerun()
+                        except mysql.connector.Error as e:
+                            st.error(f"Error scheduling appointment: {e}")
+                        finally:
+                            cursor.close()
+                            conn.close()
+                else:
+                    st.warning("Please provide a reason for the appointment.")
+        
+        # Show upcoming appointments
+        st.subheader("Upcoming Appointments")
+        conn = get_db_connection()
+        if conn:
+            cursor = conn.cursor(dictionary=True)
+            cursor.execute("""
+                SELECT a.appointment_id, a.appointment_date, a.reason, a.status, d.full_name as doctor_name
+                FROM appointments a
+                JOIN doctors d ON a.doctor_id = d.doctor_id
+                WHERE a.patient_id = %s AND a.appointment_date >= NOW()
+                ORDER BY a.appointment_date ASC
+            """, (patient_id,))
+            
+            appointments = cursor.fetchall()
+            cursor.close()
+            conn.close()
+            
+            if appointments:
+                for appt in appointments:
+                    with st.expander(f"📅 {appt['appointment_date'].strftime('%Y-%m-%d %H:%M')} - {appt['status']}"):
+                        st.write(f"**Doctor:** {appt['doctor_name']}")
+                        st.write(f"**Reason:** {appt['reason']}")
+                        st.write(f"**Status:** {appt['status']}")
+                        
+                        # Allow updating the status
+                        new_status = st.selectbox(
+                            "Update Status",
+                            ["Scheduled", "Completed", "Cancelled", "No-show"],
+                            index=["Scheduled", "Completed", "Cancelled", "No-show"].index(appt['status']),
+                            key=f"status_{appt['appointment_id']}"
+                        )
+                        
+                        if st.button("Update Status", key=f"update_{appt['appointment_id']}"):
+                            conn = get_db_connection()
+                            if conn:
+                                cursor = conn.cursor()
+                                try:
+                                    cursor.execute("""
+                                        UPDATE appointments
+                                        SET status = %s
+                                        WHERE appointment_id = %s
+                                    """, (new_status, appt['appointment_id']))
+                                    
+                                    conn.commit()
+                                    st.success("✅ Appointment status updated.")
+                                    time_module.sleep(1)
+                                    st.rerun()
+                                except mysql.connector.Error as e:
+                                    st.error(f"Error updating appointment status: {e}")
+                                finally:
+                                    cursor.close()
+                                    conn.close()
+            else:
+                st.info("No upcoming appointments scheduled.")
+
+# Display Alzheimer's analysis page
+def display_alzheimer_analysis(patient_id, patient_info):
+    st.header("🧠 Alzheimer's Disease Analysis")
+    
+    # Get existing features for the patient if available
+    existing_features = get_patient_features(patient_id)
+    
+    # Create feature categories for better organization
+    feature_categories = {
+        "Cognitive Tests": ["CDRSB", "MMSE", "MOCA", "ADAS11", "ADAS13", "FAQ"],
+        "Memory Tests": ["RAVLT_immediate", "RAVLT_learning", "RAVLT_forgetting", "RAVLT_perc_forgetting", "LDELTOTAL"],
+        "Functional Tests": ["TRABSCOR", "DIGITSCOR", "mPACCdigit", "mPACCtrailsB"],
+        "Patient Self-Report": ["EcogPtTotal", "EcogPtMem", "EcogPtLang", "EcogPtVisspat", "EcogPtPlan", "EcogPtOrgan", "EcogPtDivatt"],
+        "Study Partner Report": ["EcogSPTotal", "EcogSPMem", "EcogSPLang", "EcogSPVisspat", "EcogSPPlan", "EcogSPOrgan", "EcogSPDivatt"],
+        "Brain Measurements": ["Hippocampus", "Entorhinal", "Fusiform", "MidTemp", "Ventricles", "WholeBrain", "ICV", "FDG"],
+        "Biomarkers": ["ABETA", "TAU", "PTAU", "APOE4"],
+        "Demographics": ["AGE", "PTGENDER", "PTEDUCAT", "PTMARRY", "PTRACCAT", "PTETHCAT"],
+        "Other Assessments": ["ADASQ4"]
+    }
+    
+    # Get feature descriptions for tooltips
+    feature_descriptions = get_feature_descriptions()
+    
+    # Enhanced analysis with MRI
+    tab1, tab2, tab3 = st.tabs(["New Analysis", "MRI Analysis", "Analysis History"])
+    
+    with tab1:
+        # Initialize input_data dictionary to store all features
+        input_data = {}
+        
+        st.info("Enter values for as many features as possible. Hover over feature names for descriptions.")
+        
+        # Use tabs for feature categories to save space
+        feature_tabs = st.tabs(list(feature_categories.keys()))
+        
+        for i, (category, features) in enumerate(feature_categories.items()):
+            with feature_tabs[i]:
+                cols = st.columns(2)
+                for j, feature in enumerate(features):
+                    col = cols[j % 2]
+                    with col:
+                        # Show tooltip with feature description
+                        description = feature_descriptions.get(feature, "No description available")
+                        st.markdown(f"**{feature}** ℹ️")
+                        st.caption(description)
+                        
+                        # Use existing value as default if available
+                        default_value = 0.0
+                        if existing_features and feature in existing_features and existing_features[feature] is not None:
+                            default_value = float(existing_features[feature])
+                            
+                        # Input field for feature
+                        value = st.number_input(
+                            f"{feature}", 
+                            value=default_value,
+                            step=0.01,
+                            format="%.2f",
+                            key=f"feature_{feature}"
+                        )
+                        input_data[feature] = value
+        
+        # Add any missing features with default values
+        for feature in get_feature_columns():
+            if feature not in input_data:
+                input_data[feature] = 0.0
+                
+        # Make prediction
+        col1, col2, col3 = st.columns([2, 2, 1])
+        with col1:
+            save_only = st.button("💾 Save Features Only")
+        with col2:
+            predict_button = st.button("🧠 Predict Alzheimer's Status", type="primary")
+        with col3:
+            discard_button = st.button("❌ Discard")
+            
+        if save_only:
+            # Save feature values to database without prediction
+            if store_features(patient_id, input_data):
+                st.success("✅ Patient features saved to database")
+                time_module.sleep(1)
+                st.rerun()
+            else:
+                st.error("❌ Failed to save patient features")
+        
+        if predict_button:
+            with st.spinner("Processing prediction..."):
+                # Save feature values to database
+                if store_features(patient_id, input_data):
+                    st.success("✅ Patient features saved to database")
+                    
+                    # Run prediction
+                    prediction, confidence = predict_alzheimer(input_data)
+                    
+                    # Get the predicted class (0, 1, 2) from the prediction
+                    # Map the class index to the class name using the mapping
+                    predicted_idx = 0  # Default to 0 (Cognitively Normal)
+                    if prediction == "Demented":
+                        predicted_idx = 2  # Alzheimer's Disease
+                    elif prediction == "Converted":
+                        predicted_idx = 1  # Mild Cognitive Impairment
+                    
+                    # Map the class index to the class name
+                    mapped_prediction = ALZHEIMER_CLASS_MAPPING.get(predicted_idx, prediction)
+                    
+                    # Store prediction results
+                    st.session_state.last_prediction = mapped_prediction
+                    st.session_state.last_confidence = confidence
+                    st.session_state.last_input_data = input_data
+                    
+                    store_results = st.radio(
+                        "Would you like to save these prediction results?",
+                        options=["Yes", "No"],
+                        index=0,
+                        horizontal=True
+                    )
+                    
+                    if store_results == "Yes":
+                        analysis_id = store_prediction(patient_id, input_data, prediction, confidence)
+                        
+                        if analysis_id:
+                            st.success("✅ Prediction results saved")
+                            
+                            # Create columns for results
+                            st.markdown("### Prediction Results")
+                            result_cols = st.columns([1, 1, 1])
+                            
+                            # Display prediction results
+                            with result_cols[0]:
+                                # Add appropriate icon and color based on prediction
+                                if predicted_idx == 2:  # Alzheimer's Disease
+                                    st.error(f"⚠️ Prediction: {mapped_prediction}")
+                                elif predicted_idx == 1:  # Mild Cognitive Impairment
+                                    st.warning(f"⚠️ Prediction: {mapped_prediction}")
+                                else:  # Cognitively Normal
+                                    st.success(f"✅ Prediction: {mapped_prediction}")
+                            
+                            with result_cols[1]:
+                                st.metric("Confidence", f"{confidence:.2%}")
+                                
+                            with result_cols[2]:
+                                st.write("Prediction ID:", analysis_id)
+                                st.write("Time:", datetime.now().strftime("%Y-%m-%d %H:%M"))
+                            
+                            # Display class probabilities with enhanced visualization
+                            if hasattr(st.session_state, 'last_probabilities') and hasattr(st.session_state, 'last_prediction_classes'):
+                                probs = st.session_state.last_probabilities
+                                classes = st.session_state.last_prediction_classes
+                                
+                                # Map class names for display
+                                mapped_classes = [ALZHEIMER_CLASS_MAPPING.get(i, c) for i, c in enumerate(classes)]
+                                
+                                prob_df = pd.DataFrame({
+                                    'Class': mapped_classes,
+                                    'Probability': probs
+                                })
+                                
+                                st.markdown("### Probability Distribution")
+                                
+                                # Create an enhanced visualization with Seaborn
+                                fig, ax = plt.subplots(figsize=(2, 1), dpi=150)
+                                colors = ['#52b788', '#ffb703', '#e63946']  # Green, Yellow, Red
+                                
+                                # Create the bar plot
+                                bars = sns.barplot(
+                                    x='Class', 
+                                    y='Probability', 
+                                    data=prob_df,
+                                    palette=colors,
+                                    ax=ax,
+                                    width=0.6
+                                )
+                                
+                                # Add percentage labels on top of bars
+                                for i, p in enumerate(probs):
+                                    ax.text(
+                                        i, p + 0.01, 
+                                        f"{p:.1%}", 
+                                        ha='center', 
+                                        fontweight='bold',
+                                        fontsize=6
+                                    )
+                                
+                                # Style the plot
+                                ax.set_ylim(0, 1.05)
+                                ax.set_xlabel('Classification', fontsize=6, fontweight='bold')
+                                ax.set_ylabel('Probability', fontsize=6, fontweight='bold')
+                                ax.tick_params(axis='both', labelsize=5)
+                                ax.grid(axis='y', linestyle='--', alpha=0.5, linewidth=0.5)
+                                ax.spines['top'].set_visible(False)
+                                ax.spines['right'].set_visible(False)
+                            
+                            # Show feature importance
+                            if clf is not None and hasattr(clf, 'feature_importances_'):
+                                st.markdown("### Top Features Used in Prediction")
+                                
+                                # Better feature importance visualization
+                                features = get_feature_columns()
+                                importances = clf.feature_importances_
+                                
+                                # Sort features by importance
+                                indices = np.argsort(importances)[::-1]
+                                
+                                # Take top 10 most important features (reduced from 15)
+                                top_indices = indices[:10]
+                                top_features = [features[i] for i in top_indices]
+                                top_importances = [importances[i] for i in top_indices]
+                                
+                                # Create a more compact plot
+                                fig, ax = plt.subplots(figsize=(3, 1.8), dpi=150)
+                                
+                                # Create a color gradient based on importance
+                                colors = plt.cm.viridis(np.linspace(0.1, 0.9, len(top_indices)))
+                                
+                                # Create horizontal bar plot - show only top 10
+                                top_10_df = diff_df.head(10) if len(diff_df) > 10 else diff_df
+                                bars = ax.barh(top_10_df['Feature'], top_10_df['Importance'], color=colors[:len(top_10_df)], height=0.5)
+                                
+                                # Add labels with importance values - smaller font
+                                for i, bar in enumerate(bars):
+                                    width = bar.get_width()
+                                    ax.text(
+                                        width + 0.001, 
+                                        bar.get_y() + bar.get_height()/2,
+                                        f"{width:.3f}",
+                                        va='center',
+                                        fontweight='bold',
+                                        fontsize=4
+                                    )
+                                
+                                # Style the plot - smaller text
+                                ax.set_xlabel('Importance Score', fontsize=6, fontweight='bold')
+                                ax.set_title('Feature Importance', fontsize=7, fontweight='bold')
+                                ax.grid(axis='x', linestyle='--', alpha=0.6, linewidth=0.5)
+                                ax.spines['top'].set_visible(False)
+                                ax.spines['right'].set_visible(False)
+                                ax.tick_params(axis='y', labelsize=5)
+                                ax.tick_params(axis='x', labelsize=5)
+                            
+                            # Generate report with AI assistant
+                            st.markdown("### 🤖 AI-Generated Clinical Assessment")
+                            with st.spinner("Generating clinical assessment..."):
+                                # Prepare features for AI prompt
+                                important_features = {
+                                    "MMSE": input_data["MMSE"],
+                                    "CDRSB": input_data["CDRSB"],
+                                    "ADAS13": input_data["ADAS13"],
+                                    "RAVLT_immediate": input_data["RAVLT_immediate"],
+                                    "Hippocampus": input_data["Hippocampus"],
+                                    "Entorhinal": input_data["Entorhinal"],
+                                    "AGE": input_data["AGE"],
+                                    "APOE4": input_data["APOE4"],
+                                    "TAU": input_data["TAU"],
+                                    "PTAU": input_data["PTAU"],
+                                    "ABETA": input_data["ABETA"]
+                                }
+                                
+                                # Get recent medical records
+                                records = get_patient_records(patient_id)
+                                recent_records = records[:3] if records else []
+                                
+                                # Create prompt for AI
+                                prompt = f"""
+                                You are a clinical expert in Alzheimer's disease. Provide an assessment of the following patient based on the machine learning model prediction and clinical data.
+                                
+                                Patient Information:
+                                - Name: {patient_info['full_name']}
+                                - Age: {datetime.now().year - patient_info['birth_date'].year} years
+                                - Gender: {patient_info['gender']}
+                                
+                                Model Prediction:
+                                - Prediction: {mapped_prediction}
+                                - Confidence: {confidence:.2%}
+                                
+                                Key Clinical Features:
+                                """
+                                
+                                for feature, value in important_features.items():
+                                    desc = feature_descriptions.get(feature, "")
+                                    short_desc = desc.split("(")[0].strip() if "(" in desc else desc
+                                    prompt += f"- {feature}: {value} ({short_desc})\n"
+                                    
+                                if recent_records:
+                                    prompt += "\nRecent Medical History:\n"
+                                    for record in recent_records:
+                                        prompt += f"- Date: {record['visit_date']}, Diagnosis: {record['diagnosis']}\n"
+                                        prompt += f"  Notes: {record['notes'][:100]}...\n" if len(record['notes']) > 100 else f"  Notes: {record['notes']}\n"
+                                
+                                prompt += """
+                                Please provide:
+                                1. A clinical assessment of the patient's Alzheimer's disease status based on the model prediction and clinical features
+                                2. Interpretation of key biomarkers and test scores
+                                3. Recommendations for further tests or interventions if appropriate
+                                4. Brief list of relevant research citations supporting your assessment
+                                
+                                Format your response in clear sections with headings. Be concise but thorough.
+                                """
+                                
+                                try:
+                                    response = model.generate_content(prompt)
+                                    assessment = response.text
+                                    
+                                    # Display the AI assessment
+                                    st.markdown(assessment)
+                                    
+                                    # Option to save assessment to medical records
+                                    if st.button("💾 Save Assessment to Medical Records"):
+                                        diagnosis = f"AI-assisted Alzheimer's Analysis: {mapped_prediction}"
+                                        if add_medical_record(patient_id, diagnosis, assessment):
+                                            st.success("✅ Assessment saved to medical records")
+                                        else:
+                                            st.error("❌ Failed to save assessment")
+                                except Exception as e:
+                                    st.error(f"Error generating AI assessment: {e}")
+                        else:
+                            st.error("❌ Failed to save prediction results")
+                    else:
+                        st.info("Prediction results were not saved to the database")
+                        
+                        # Still display the results even if not saved
+                        st.markdown("### Prediction Results")
+                        result_cols = st.columns([1, 1])
+                        
+                        with result_cols[0]:
+                            if predicted_idx == 2:  # Alzheimer's Disease
+                                st.error(f"⚠️ Prediction: {mapped_prediction}")
+                            elif predicted_idx == 1:  # Mild Cognitive Impairment
+                                st.warning(f"⚠️ Prediction: {mapped_prediction}")
+                            else:  # Cognitively Normal
+                                st.success(f"✅ Prediction: {mapped_prediction}")
+                        
+                        with result_cols[1]:
+                            st.metric("Confidence", f"{confidence:.2%}")
+                            
+                else:
+                    st.error("❌ Failed to save patient features")
+    
+    # MRI Analysis Tab
+    with tab2:
+        st.subheader("MRI Scan Analysis")
+        
+        # Create tabs for upload vs viewing
+        mri_tab1, mri_tab2 = st.tabs(["Upload New Scan", "View Patient Scans"])
+        
+        # Upload New Scan tab
+        with mri_tab1:
+            st.markdown("### Upload New MRI Scan")
+            
+            # File uploader for MRI scan
+            uploaded_file = st.file_uploader(
+                "Upload MRI scan (jpg, png, or dicom)", 
+                type=["jpg", "jpeg", "png", "dcm"]
+            )
+            
+            scan_type = st.selectbox(
+                "Scan Type",
+                ["T1-weighted", "T2-weighted", "FLAIR", "PET", "Other"],
+                index=0
+            )
+            
+            scan_notes = st.text_area("Scan Notes", placeholder="Enter any notes about this scan...")
+            
+            # Show preview if file is uploaded
+            if uploaded_file is not None:
+                col1, col2 = st.columns([1, 1])
+                
+                # Save uploaded file temporarily
+                temp_dir = "temp_uploads"
+                os.makedirs(temp_dir, exist_ok=True)
+                file_path = os.path.join(temp_dir, uploaded_file.name)
+                
+                with open(file_path, "wb") as f:
+                    f.write(uploaded_file.getbuffer())
+                
+                # Display image preview
+                with col1:
+                    st.markdown("### Preview")
+                    st.image(file_path, use_container_width=True)
+                
+                with col2:
+                    st.markdown("### Analysis Options")
+                    # Remove other model options, keep only Hugging Face
+                    analysis_options = "Hugging Face Transformer"
+                    st.info("Using DHEIVER/Alzheimer-MRI Transformer model for analysis")
+                    
+                    if st.button("Process Scan", type="primary"):
+                        with st.spinner("Processing MRI scan..."):
+                            # Run Hugging Face model inference
+                            st.info("Running Hugging Face model analysis...")
+                            from mri_models import process_mri_with_huggingface
+                            
+                            # Truncate scan_type to 45 characters to prevent database error
+                            truncated_scan_type = scan_type[:45] if scan_type and len(scan_type) > 45 else scan_type
+                            
+                            results = process_mri_with_huggingface(file_path)
+                            
+                            if results and 'error' not in results:
+                                # Display results
+                                st.markdown("### Analysis Results")
+                                result_cols = st.columns([1, 1])
+                                
+                                with result_cols[0]:
+                                    prediction = results.get('prediction', 'Unknown')
+                                    confidence = results.get('confidence', 0)
+                                    
+                                    # Format prediction with appropriate styling
+                                    if "Demented" in prediction or "demented" in prediction.lower():
+                                        st.error(f"**Prediction:** {prediction}")
+                                    elif "Mild" in prediction or "mild" in prediction.lower():
+                                        st.warning(f"**Prediction:** {prediction}")
+                                    else:
+                                        st.success(f"**Prediction:** {prediction}")
+                                        
+                                    st.info(f"**Confidence:** {confidence:.1%}")
+                                    
+                                    # Display all class probabilities if available
+                                    if 'all_probabilities' in results:
+                                        st.markdown("#### All Class Probabilities")
+                                        probs = results['all_probabilities']
+                                        if isinstance(probs, list):
+                                            for cls in probs:
+                                                if isinstance(cls, dict) and 'label' in cls and 'probability' in cls:
+                                                    st.markdown(f"**{cls['label']}**: {cls['probability']:.1%}")
+                                        
+                                    # Extract key measurements if available
+                                    if 'roi_measurements' in results:
+                                        st.markdown("#### Key Brain Measurements")
+                                        measurements = results['roi_measurements']
+                                        
+                                        key_regions = [
+                                            ('hippocampus_total', 'Hippocampus', 'Critical for memory formation'),
+                                            ('entorhinal_total', 'Entorhinal Cortex', 'Early site of tau pathology'),
+                                            ('temporal_lobe_total', 'Temporal Lobe', 'Important for language and memory'),
+                                            ('lateral_ventricles', 'Ventricles', 'Enlarged in AD')
+                                        ]
+                                        
+                                        for key, name, desc in key_regions:
+                                            if key in measurements:
+                                                st.markdown(f"**{name}:** {measurements[key]:.2f} mm³ ({desc})")
+                        
+                                with result_cols[1]:
+                                    # Show visualization
+                                    if 'heatmap_path' in results and results['heatmap_path'] and os.path.exists(results['heatmap_path']):
+                                        st.markdown("#### Grad-CAM Visualization")
+                                        st.image(results['heatmap_path'], use_container_width=True)
+                                        st.caption("Heat map showing regions that influenced the model's decision (XAI)")
+                                
+                                # Add MRI scan description section
+                                st.markdown("### Model Interpretation of MRI Scan")
+                                with st.spinner("Generating detailed scan description..."):
+                                    description = generate_mri_description(results, truncated_scan_type)
+                                    st.markdown(description)
+                                        
+                                    # Save scan with results to database
+                                    patient_id = st.session_state.selected_patient
+                                    save_result = save_mri_scan(
+                                        patient_id, 
+                                        file_path, 
+                                        truncated_scan_type, 
+                                        prediction=results.get('prediction'), 
+                                        confidence=results.get('confidence'), 
+                                        notes=scan_notes
+                                    )
+                                    
+                                    if save_result:
+                                        st.success(f"MRI scan saved to patient record with ID #{save_result}")
+                                        
+                                        # Also save ROI measurements if available
+                                        if 'roi_measurements' in results:
+                                            try:
+                                                from mri_models import save_roi_measurements
+                                                measurement_id = save_roi_measurements(save_result, results['roi_measurements'])
+                                                if measurement_id:
+                                                    st.success(f"Brain region measurements saved with ID #{measurement_id}")
+                                            except Exception as e:
+                                                st.warning(f"Could not save measurements: {e}")
+                                        
+                                        # Offer button to add results to medical record
+                                        if st.button("Add Results to Medical Records"):
+                                            prediction = results.get('prediction', 'Unknown')
+                                            confidence = results.get('confidence', 0)
+                                            
+                                            # Format medical record entry
+                                            diagnosis = f"MRI Scan Analysis (Hugging Face Transformer)"
+                                            notes = f"""
+                                            MRI Scan Type: {truncated_scan_type}
+                                            Analysis Method: Hugging Face Transformer (DHEIVER/Alzheimer-MRI)
+                                            Prediction: {prediction}
+                                            Confidence: {confidence:.1%}
+                                            
+                                            User Notes: {scan_notes}
+                                            
+                                            Key Measurements:
+                                            """
+                                            
+                                            if 'roi_measurements' in results:
+                                                measurements = results['roi_measurements']
+                                                for key, name, desc in key_regions:
+                                                    if key in measurements:
+                                                        notes += f"\n{name}: {measurements[key]:.2f} mm³"
+                                            
+                                            # Add medical record
+                                            if add_medical_record(patient_id, diagnosis, notes):
+                                                st.success("Results added to medical records")
+                            else:
+                                # Display error message
+                                error_msg = results.get('error', 'Unknown error occurred') if results else 'Failed to process MRI scan'
+                                st.error(f"Error processing MRI scan: {error_msg}")
+                                
+                                # Still allow saving the scan without analysis
+                                if st.button("Save Scan Without Analysis"):
+                                    save_result = save_mri_scan(
+                                        st.session_state.selected_patient, 
+                                        file_path, 
+                                        truncated_scan_type, 
+                                        notes=f"Analysis failed: {error_msg}\n\nUser notes: {scan_notes}"
+                                    )
+                                    
+                                    if save_result:
+                                        st.success(f"MRI scan saved to patient record with ID #{save_result}")
+                                    else:
+                                        st.error("Failed to save scan to database")
+                            
+                            # Add additional debug information button
+                            with st.expander("Debug Information"):
+                                st.write("File path:", file_path)
+                                st.write("Scan type:", truncated_scan_type)
+                                st.write("Original scan type:", scan_type)
+                                st.write("Results:", results)
+                    else:
+                        # Just save the scan without analysis
+                        save_result = save_mri_scan(
+                            st.session_state.selected_patient, 
+                            file_path, 
+                            truncated_scan_type, 
+                            notes=scan_notes
+                        )
+                        
+                        if save_result:
+                            st.success(f"MRI scan saved to patient record with ID #{save_result}")
+                        else:
+                            st.error("Failed to save scan to database")
+            else:
+                st.info("Please upload an MRI scan file to continue.")
+        
+        # View Patient Scans tab
+        with mri_tab2:
+            st.markdown("### Patient MRI Scan History")
+            st.info("In the full implementation, this section would display all MRI scans for the patient with options to view details, process with AI models, and generate visualizations.")
+            
+            # Example scan data
+            example_scans = [
+                {"id": 1, "date": "2023-05-15", "type": "T1-weighted", "prediction": "Cognitively Normal", "confidence": 0.89},
+                {"id": 2, "date": "2023-07-20", "type": "FLAIR", "prediction": "Mild Cognitive Impairment", "confidence": 0.76},
+                {"id": 3, "date": "2023-09-30", "type": "PET", "prediction": "Alzheimer's Disease (AD)", "confidence": 0.92}
+            ]
+            
+            # Display example scans
+            example_df = pd.DataFrame(example_scans)
+            st.dataframe(example_df, use_container_width=True)
+            
+            # Example scan details
+            st.markdown("### Example MRI Scan Details")
+            detail_cols = st.columns([1, 1])
+            
+            with detail_cols[0]:
+                # Example MRI image
+                try:
+                    # Try to generate a random brain-like image
+                    x, y = np.meshgrid(np.linspace(-3, 3, 224), np.linspace(-3, 3, 224))
+                    d = np.sqrt(x*x + y*y)
+                    sigma, mu = 1.0, 0.0
+                    g = np.exp(-((d-mu)**2 / (2.0 * sigma**2)))
+                    
+                    # Add some random noise
+                    brain = g + 0.2*np.random.rand(224, 224)
+                    brain = (brain * 255).astype(np.uint8)
+                    
+                    # Convert to RGB
+                    brain_rgb = cv2.cvtColor(brain, cv2.COLOR_GRAY2RGB)
+                    
+                    st.image(brain_rgb, use_container_width=True, caption="Example MRI Scan")
+                except Exception:
+                    st.info("Example MRI scan would be displayed here.")
+            
+            with detail_cols[1]:
+                st.markdown("**Scan Type:** T1-weighted")
+                st.markdown("**Scan Date:** 2023-05-15")
+                st.markdown("**Prediction:** Cognitively Normal")
+                st.markdown("**Confidence:** 89%")
+                st.markdown("**Notes:** Patient's first MRI scan, used as baseline for comparison.")
+                
+                # Example buttons for scan operations
+                st.button("Process with CNN", disabled=True)
+                st.button("Process with SWIN", disabled=True)
+                st.button("Generate Grad-CAM", disabled=True)
+                st.button("🗑️ Delete Scan", disabled=True)
+    
+    # Analysis History tab
+    with tab3:
+        analyses = get_patient_analyses(patient_id)
+        
+        if not analyses:
+            st.info("No previous analyses found for this patient.")
+        else:
+            # Convert to DataFrame for display
+            df_analyses = pd.DataFrame(analyses)
+            
+            # Format dates
+            df_analyses['analyzed_at'] = pd.to_datetime(df_analyses['analyzed_at'])
+            df_analyses['Date'] = df_analyses['analyzed_at'].dt.strftime('%Y-%m-%d %H:%M')
+            
+            # Prepare for display
+            display_df = df_analyses[['analysis_id', 'prediction', 'confidence_score', 'Date']]
+            display_df.columns = ['ID', 'Prediction', 'Confidence', 'Date']
+            
+            # Display analyses table
+            st.dataframe(display_df, hide_index=True, use_container_width=True)
+            
+            # Create a visualization of prediction history
+            st.subheader("Prediction History Visualization")
+            
+            # Prepare data for chart
+            chart_df = df_analyses.copy()
+            chart_df['confidence_score'] = chart_df['confidence_score'].astype(float)
+            chart_df = chart_df.sort_values('analyzed_at')
+            
+            # Create color mapping for predictions
+            color_map = {
+                'Demented': '#ff9999',
+                'Nondemented': '#99ff99',
+                'Converted': '#ffcc99'
+            }
+            
+            # Create plot with minimal size
+            fig, ax = plt.subplots(figsize=(1.8, 1), dpi=150)
+            
+            for pred in chart_df['prediction'].unique():
+                pred_data = chart_df[chart_df['prediction'] == pred]
+                ax.scatter(
+                    pred_data['analyzed_at'], 
+                    pred_data['confidence_score'],
+                    label=pred,
+                    color=color_map.get(pred, '#cccccc'),
+                    s=8  # Even smaller points
+                )
+            
+            # Connect points with lines - thinner
+            ax.plot(chart_df['analyzed_at'], chart_df['confidence_score'], 'k--', alpha=0.3, linewidth=0.3)
+            
+            # Format plot - minimal text
+            ax.set_ylabel('Confidence', fontsize=3)
+            ax.set_xlabel('Date', fontsize=3)
+            ax.set_title('Prediction History', fontsize=4)
+            ax.legend(fontsize=3, loc='best', frameon=False)
+            ax.grid(True, alpha=0.3, linewidth=0.3)
+            ax.tick_params(axis='both', labelsize=2.5, length=2, pad=1)
+            # Rotate x-axis dates for better fit
+            plt.xticks(rotation=45)
+            
+            # Option to compare analyses
+            st.subheader("Compare Analyses")
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                analysis_id1 = st.selectbox(
+                    "Select First Analysis",
+                    options=df_analyses['analysis_id'].tolist(),
+                    format_func=lambda x: f"ID: {x} - {df_analyses[df_analyses['analysis_id']==x]['Date'].iloc[0]}"
+                )
+            
+            with col2:
+                remaining_ids = [id for id in df_analyses['analysis_id'].tolist() if id != analysis_id1]
+                if remaining_ids:
+                    analysis_id2 = st.selectbox(
+                        "Select Second Analysis",
+                        options=remaining_ids,
+                        format_func=lambda x: f"ID: {x} - {df_analyses[df_analyses['analysis_id']==x]['Date'].iloc[0]}"
+                    )
+                    
+                    if st.button("Compare Analyses"):
+                        # Get the full data for both analyses
+                        conn = get_db_connection()
+                        if conn:
+                            cursor = conn.cursor(dictionary=True)
+                            try:
+                                cursor.execute("""
+                                    SELECT analysis_id, prediction, confidence_score, analyzed_at, input_features
+                                    FROM alzheimers_analysis
+                                    WHERE analysis_id IN (%s, %s)
+                                """, (analysis_id1, analysis_id2))
+                                
+                                results = cursor.fetchall()
+                                cursor.close()
+                                conn.close()
+                                
+                                if len(results) == 2:
+                                    # Extract data
+                                    data1 = next(r for r in results if r['analysis_id'] == analysis_id1)
+                                    data2 = next(r for r in results if r['analysis_id'] == analysis_id2)
+                                    
+                                    # Parse JSON features
+                                    features1 = json.loads(data1['input_features'])
+                                    features2 = json.loads(data2['input_features'])
+                                    
+                                    # Compare results
+                                    st.markdown("### Analysis Comparison")
+                                    
+                                    # Display summary
+                                    summary_cols = st.columns(2)
+                                    with summary_cols[0]:
+                                        st.markdown(f"**First Analysis** (ID: {analysis_id1})")
+                                        st.markdown(f"Date: {data1['analyzed_at']}")
+                                        st.markdown(f"Prediction: {data1['prediction']}")
+                                        st.markdown(f"Confidence: {float(data1['confidence_score']):.2%}")
+                                    
+                                    with summary_cols[1]:
+                                        st.markdown(f"**Second Analysis** (ID: {analysis_id2})")
+                                        st.markdown(f"Date: {data2['analyzed_at']}")
+                                        st.markdown(f"Prediction: {data2['prediction']}")
+                                        st.markdown(f"Confidence: {float(data2['confidence_score']):.2%}")
+                                    
+                                    # Find key differences in features
+                                    st.markdown("### Key Differences in Features")
+                                    
+                                    differences = []
+                                    for feature in get_feature_columns():
+                                        if feature in features1 and feature in features2:
+                                            val1 = float(features1[feature])
+                                            val2 = float(features2[feature])
+                                            
+                                            # Calculate absolute and percentage difference
+                                            abs_diff = val2 - val1
+                                            pct_diff = abs_diff / (val1 if val1 != 0 else 1) * 100
+                                            
+                                            # Consider significant changes
+                                            if abs(pct_diff) > 10 or abs(abs_diff) > 0.5:
+                                                differences.append({
+                                                    'Feature': feature,
+                                                    'First Value': val1,
+                                                    'Second Value': val2,
+                                                    'Absolute Change': abs_diff,
+                                                    'Percentage Change': pct_diff
+                                                })
+                                    
+                                    if differences:
+                                        # Convert to DataFrame and sort by percentage change
+                                        diff_df = pd.DataFrame(differences)
+                                        diff_df = diff_df.sort_values('Percentage Change', key=abs, ascending=False)
+                                        
+                                        # Format for display
+                                        display_diff = diff_df.copy()
+                                        display_diff['Percentage Change'] = display_diff['Percentage Change'].apply(lambda x: f"{x:+.2f}%")
+                                        display_diff['Absolute Change'] = display_diff['Absolute Change'].apply(lambda x: f"{x:+.2f}")
+                                        
+                                        # Display differences table
+                                        st.dataframe(display_diff, hide_index=True, use_container_width=True)
+                                    else:
+                                        st.info("No significant differences found between the analyses.")
+                            except Exception as e:
+                                st.error(f"Error comparing analyses: {e}")
+                else:
+                    st.info("Need at least two analyses to compare.")
+
+# Display medical records page
+def display_medical_records(patient_id, patient_info):
+    st.header("📋 Medical Records")
+    
+    # Get all medical records
+    records = get_patient_records(patient_id)
+    
+    # Add new record form
+    st.subheader("Add New Medical Record")
+    with st.form("medical_record_form"):
+        diagnosis = st.text_input("Diagnosis")
+        visit_date = st.date_input("Visit Date", value=datetime.now().date())
+        notes = st.text_area("Clinical Notes", height=150)
+        
+        submit = st.form_submit_button("Save Medical Record")
+        
+        if submit:
+            if diagnosis and notes:
+                conn = get_db_connection()
+                if conn:
+                    cursor = conn.cursor()
+                    try:
+                        cursor.execute("""
+                            INSERT INTO medical_records 
+                            (patient_id, diagnosis, visit_date, notes)
+                            VALUES (%s, %s, %s, %s)
+                        """, (patient_id, diagnosis, visit_date, notes))
+                        
+                        conn.commit()
+                        st.success("✅ Medical record saved successfully")
+                        
+                        # Refresh the page after successful save
+                        time_module.sleep(1)
+                        st.rerun()
+                    except mysql.connector.Error as e:
+                        st.error(f"Error saving medical record: {e}")
+                    finally:
+                        cursor.close()
+                        conn.close()
+            else:
+                st.warning("Please enter both diagnosis and notes.")
+    
+    # Display existing records
+    st.subheader("Medical History")
+    
+    if not records:
+        st.info("No medical records found for this patient.")
+    else:
+        # Organize records by year for better navigation
+        records_df = pd.DataFrame(records)
+        records_df['visit_date'] = pd.to_datetime(records_df['visit_date'])
+        records_df['year'] = records_df['visit_date'].dt.year
+        
+        # Group by year
+        years = sorted(records_df['year'].unique(), reverse=True)
+        
+        # Create tabs for years
+        if len(years) > 1:
+            year_tabs = st.tabs([str(year) for year in years])
+            
+            for i, year in enumerate(years):
+                with year_tabs[i]:
+                    year_records = records_df[records_df['year'] == year].sort_values('visit_date', ascending=False)
+                    
+                    for _, record in year_records.iterrows():
+                        with st.expander(f"{record['visit_date'].strftime('%Y-%m-%d')} - {record['diagnosis']}"):
+                            st.markdown(f"**Diagnosis:** {record['diagnosis']}")
+                            st.markdown(f"**Date:** {record['visit_date'].strftime('%Y-%m-%d')}")
+                            st.markdown(f"**Notes:**")
+                            st.markdown(record['notes'])
+                            
+                            # Edit and delete options
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                if st.button("🖊️ Edit", key=f"edit_{record['record_id']}"):
+                                    st.session_state.edit_record_id = record['record_id']
+                                    st.session_state.edit_diagnosis = record['diagnosis']
+                                    st.session_state.edit_notes = record['notes']
+                                    st.rerun()
+                            
+                            with col2:
+                                if st.button("🗑️ Delete", key=f"delete_{record['record_id']}"):
+                                    conn = get_db_connection()
+                                    if conn:
+                                        cursor = conn.cursor()
+                                        try:
+                                            cursor.execute("DELETE FROM medical_records WHERE record_id = %s", (record['record_id'],))
+                                            conn.commit()
+                                            st.success("Record deleted successfully")
+                                            time_module.sleep(1)
+                                            st.rerun()
+                                        except mysql.connector.Error as e:
+                                            st.error(f"Error deleting record: {e}")
+                                        finally:
+                                            cursor.close()
+                                            conn.close()
+        else:
+            # If only one year, don't use tabs
+            for _, record in records_df.sort_values('visit_date', ascending=False).iterrows():
+                with st.expander(f"{record['visit_date'].strftime('%Y-%m-%d')} - {record['diagnosis']}"):
+                    st.markdown(f"**Diagnosis:** {record['diagnosis']}")
+                    st.markdown(f"**Date:** {record['visit_date'].strftime('%Y-%m-%d')}")
+                    st.markdown(f"**Notes:**")
+                    st.markdown(record['notes'])
+                    
+                    # Edit and delete options
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.button("🖊️ Edit", key=f"edit_{record['record_id']}"):
+                            st.session_state.edit_record_id = record['record_id']
+                            st.session_state.edit_diagnosis = record['diagnosis']
+                            st.session_state.edit_notes = record['notes']
+                            st.rerun()
+                    
+                    with col2:
+                        if st.button("🗑️ Delete", key=f"delete_{record['record_id']}"):
+                            conn = get_db_connection()
+                            if conn:
+                                cursor = conn.cursor()
+                                try:
+                                    cursor.execute("DELETE FROM medical_records WHERE record_id = %s", (record['record_id'],))
+                                    conn.commit()
+                                    st.success("Record deleted successfully")
+                                    time_module.sleep(1)
+                                    st.rerun()
+                                except mysql.connector.Error as e:
+                                    st.error(f"Error deleting record: {e}")
+                                finally:
+                                    cursor.close()
+                                    conn.close()
+    
+    # Handle record editing
+    if hasattr(st.session_state, 'edit_record_id'):
+        st.subheader("Edit Medical Record")
+        
+        with st.form("edit_record_form"):
+            edit_diagnosis = st.text_input("Diagnosis", value=st.session_state.edit_diagnosis)
+            edit_notes = st.text_area("Clinical Notes", value=st.session_state.edit_notes, height=150)
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                update = st.form_submit_button("Update Record")
+            
+            with col2:
+                cancel = st.form_submit_button("Cancel")
+            
+            if update:
+                conn = get_db_connection()
+                if conn:
+                    cursor = conn.cursor()
+                    try:
+                        cursor.execute("""
+                            UPDATE medical_records 
+                            SET diagnosis = %s, notes = %s
+                            WHERE record_id = %s
+                        """, (edit_diagnosis, edit_notes, st.session_state.edit_record_id))
+                        
+                        conn.commit()
+                        st.success("✅ Medical record updated successfully")
+                        
+                        # Clear edit state
+                        del st.session_state.edit_record_id
+                        del st.session_state.edit_diagnosis
+                        del st.session_state.edit_notes
+                        
+                        # Refresh the page
+                        time_module.sleep(1)
+                        st.rerun()
+                    except mysql.connector.Error as e:
+                        st.error(f"Error updating medical record: {e}")
+                    finally:
+                        cursor.close()
+                        conn.close()
+            
+            if cancel:
+                # Clear edit state
+                del st.session_state.edit_record_id
+                del st.session_state.edit_diagnosis
+                del st.session_state.edit_notes
+                st.rerun()
+
+# Display AI assistant page
+def display_ai_assistant(patient_id, patient_info, doctor_id):
+    st.header("💬 AI Clinical Assistant")
+    
+    # Apply custom styling for chat interface
+    st.markdown("""
+    <style>
+        /* Chat container styling */
+        .stChatMessage {
+            padding: 10px 0;
+        }
+        
+        /* Message styling */
+        .stChatMessageContent {
+            padding: 15px !important;
+            border-radius: 18px !important;
+            margin-bottom: 10px !important;
+            max-width: 85% !important;
+        }
+        
+        /* User message styling */
+        .stChatMessageContent[data-test="user-message"] {
+            background-color: #e1f5fe !important;
+            border: 1px solid #b3e5fc !important;
+            border-radius: 18px 18px 0 18px !important;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.05) !important;
+        }
+        
+        /* Assistant message styling */
+        .stChatMessageContent:not([data-test="user-message"]) {
+            background-color: white !important;
+            border: 1px solid #e0e0e0 !important;
+            border-radius: 18px 18px 18px 0 !important;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.05) !important;
+        }
+        
+        /* Chat buttons */
+        .chat-button {
+            border-radius: 20px;
+            padding: 5px 15px;
+            margin: 0 5px;
+            background-color: #f0f2f6;
+            border: 1px solid #ddd;
+            color: #444;
+            transition: all 0.3s ease;
+        }
+        
+        .chat-button:hover {
+            background-color: #e1f5fe;
+            border-color: #81d4fa;
+        }
+        
+        /* Chat input box styling */
+        .stChatInputContainer {
+            background-color: white !important;
+            border: 1px solid #e0e0e0 !important;
+            border-radius: 24px !important;
+            padding: 5px !important;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.05) !important;
+            margin-top: 15px !important;
+        }
+        
+        /* Suggestion buttons */
+        [data-testid="baseButton-secondary"] {
+            border-radius: 18px !important;
+            min-height: 36px !important;
+            border: 1px solid #e0e0e0 !important;
+            background-color: #f8f9fa !important;
+            transition: all 0.2s ease !important;
+        }
+        
+        [data-testid="baseButton-secondary"]:hover {
+            background-color: #e8f5e9 !important;
+            border-color: #a5d6a7 !important;
+            transform: translateY(-1px) !important;
+        }
+    </style>
+    """, unsafe_allow_html=True)
+    
+    # Sidebar for context options
+    with st.sidebar:
+        st.subheader("Assistant Context")
+        include_features = st.toggle("Include Clinical Features", value=True)
+        include_records = st.toggle("Include Medical Records", value=True)
+        include_analyses = st.toggle("Include Analysis History", value=True)
+        include_mri = st.toggle("Include MRI Scans", value=True)
+        
+        # Topic quick filters
+        st.subheader("Chat Topics")
+        topic_buttons = [
+            ("🧠 Cognitive Tests", "What do the cognitive test scores (MMSE, CDRSB) indicate for this patient?"),
+            ("📊 Biomarkers", "Can you explain the significance of this patient's biomarker results?"),
+            ("🩻 MRI Analysis", "Analyze the attached MRI scan and highlight key findings."),
+            ("📈 Disease Progression", "What's the likely progression for this patient based on current data?"),
+            ("💊 Treatment Options", "What treatment options should be considered for this patient?")
+        ]
+        
+        # Create a topic selector
+        st.markdown("#### Quick Topics")
+        for topic_name, topic_query in topic_buttons:
+            if st.button(topic_name, use_container_width=True):
+                if "chat_history" not in st.session_state:
+                    st.session_state.chat_history = []
+                # Use pending_message to handle this in the same way as suggestions
+                st.session_state.pending_message = topic_query
+                st.rerun()
+        
+        # Reset conversation button
+        if st.button("🔄 Reset Conversation", type="primary", use_container_width=True):
+            # Clear the conversation in session state
+            st.session_state.chat_history = []
+            
+            # Delete chat history from database
+            conn = get_db_connection()
+            if conn:
+                cursor = conn.cursor()
+                try:
+                    cursor.execute("DELETE FROM chat_logs WHERE patient_id = %s AND doctor_id = %s", 
+                                   (patient_id, doctor_id))
+                    conn.commit()
+                    st.success("Chat history cleared from database")
+                except mysql.connector.Error as e:
+                    st.error(f"Error clearing chat history: {e}")
+                finally:
+                    cursor.close()
+                    conn.close()
+                    
+            st.rerun()
+    
+    # Always load chat history from database when displaying the assistant page
+    chat_history = get_chat_history(patient_id, doctor_id)
+    
+    # Update the session state with the loaded history
+    st.session_state.chat_history = chat_history
+    
+    # MRI scan attachment with improved UI
+    st.markdown("### 🩻 Attach MRI Scan to Discussion")
+    mri_col1, mri_col2 = st.columns([3, 1])
+    
+    with mri_col1:
+        # Get MRI scans for this patient
+        mri_scans = get_patient_mri_scans(patient_id)
+        
+        if mri_scans:
+            # Create dataframe for selection
+            scan_df = pd.DataFrame(mri_scans)
+            scan_df['scan_date'] = pd.to_datetime(scan_df['scan_date'])
+            scan_df['scan_date'] = scan_df['scan_date'].dt.strftime('%Y-%m-%d %H:%M')
+            
+            # Let user select an MRI scan
+            selected_scan_id = st.selectbox(
+                "Select MRI scan to discuss with AI Assistant",
+                options=scan_df['scan_id'].tolist(),
+                format_func=lambda x: f"Scan #{x} - {scan_df.loc[scan_df['scan_id'] == x, 'scan_date'].iloc[0]} - {scan_df.loc[scan_df['scan_id'] == x, 'scan_type'].iloc[0]}"
+            )
+            
+            # Get the selected scan
+            selected_scan = next((scan for scan in mri_scans if scan['scan_id'] == selected_scan_id), None)
+            
+            if selected_scan and os.path.exists(selected_scan['file_path']):
+                st.session_state.current_mri_scan = selected_scan
+                
+                # Add a button to prompt AI about the selected scan
+                if st.button("🔍 Ask AI about this scan", use_container_width=True):
+                    prompt = f"Please analyze this patient's MRI scan (ID #{selected_scan_id}, Type: {selected_scan['scan_type']}) and provide insights."
+                    st.session_state.pending_message = prompt
+                    st.rerun()
+        else:
+            st.info("No MRI scans available for this patient.")
+            st.session_state.current_mri_scan = None
+    
+    with mri_col2:
+        if hasattr(st.session_state, 'current_mri_scan') and st.session_state.current_mri_scan:
+            scan = st.session_state.current_mri_scan
+            if os.path.exists(scan['file_path']):
+                st.image(scan['file_path'], use_container_width=True)
+    
+    # Display chat messages directly on the screen without a container
+    st.markdown("### 💬 Chat History")
+
+    # Display empty state or messages
+    if not st.session_state.chat_history:
+        st.markdown("""
+        <div style="text-align:center; padding:50px;">
+            <div style="font-size:70px; margin-bottom:10px;">💬</div>
+            <h3>Start a conversation with the AI Assistant</h3>
+            <p>Ask questions about the patient's data or how to interpret results</p>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        for i, (sender, msg) in enumerate(st.session_state.chat_history):
+            if sender == "You":
+                message(msg, is_user=True, key=f"msg_{i}")
+            else:
+                message(msg, is_user=False, key=f"msg_{i}")
+    
+    # Chat controls
+    control_cols = st.columns([1, 1, 1, 1, 1])
+    with control_cols[0]:
+        if st.button("📄 Export Chat", use_container_width=True):
+            # Generate chat export
+            if st.session_state.chat_history:
+                chat_text = f"Chat History for Patient: {patient_info['full_name']} (ID: {patient_id})\n"
+                chat_text += f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+                
+                for sender, msg in st.session_state.chat_history:
+                    chat_text += f"{sender}: {msg}\n\n"
+                
+                # Create download button for the chat history
+                st.download_button(
+                    label="Download Chat Log",
+                    data=chat_text,
+                    file_name=f"chat_patient_{patient_id}_{datetime.now().strftime('%Y%m%d')}.txt",
+                    mime="text/plain"
+                )
+    
+    with control_cols[1]:
+        if st.button("⬇️ Scroll to Bottom", use_container_width=True):
+            # Use JavaScript to scroll to bottom
+            st.components.v1.html(
+                """
+                <script>
+                    function scrollToBottom() {
+                        const containers = document.getElementsByClassName('stChatFloatingInputContainer');
+                        if (containers.length > 0) {
+                            const chatContainer = containers[0].parentElement;
+                            chatContainer.scrollTop = chatContainer.scrollHeight;
+                        }
+                    }
+                    setTimeout(scrollToBottom, 100);
+                </script>
+                """,
+                height=0
+            )
+    
+    with control_cols[2]:
+        if st.button("📝 Add to Notes", use_container_width=True, key="add_to_notes"):
+            # Get the last AI response
+            last_ai_message = ""
+            for sender, msg in reversed(st.session_state.chat_history):
+                if sender == "Assistant":
+                    last_ai_message = msg
+                    break
+            
+            if last_ai_message:
+                # Store as a medical record
+                diagnosis = f"AI Assistant notes from {datetime.now().strftime('%Y-%m-%d')}"
+                if add_medical_record(patient_id, diagnosis, last_ai_message):
+                    st.success("Added AI response to patient's medical records")
+                else:
+                    st.error("Failed to add to medical records")
+    
+    with control_cols[3]:
+        # Clear active MRI scan
+        if hasattr(st.session_state, 'current_mri_scan') and st.session_state.current_mri_scan:
+            if st.button("❌ Clear MRI", use_container_width=True):
+                st.session_state.current_mri_scan = None
+                st.rerun()
+    
+    with control_cols[4]:
+        # Generate a summary button
+        if st.button("📊 Summarize", use_container_width=True) and st.session_state.chat_history:
+            summary_prompt = "Please summarize our conversation so far and highlight the key clinical insights."
+            st.session_state.pending_message = summary_prompt
+            st.rerun()
+    
+    # Chat input with suggestions
+    if "chat_prompt" in st.session_state and st.session_state.chat_prompt:
+        # Store the prompt in a variable
+        prompt_value = st.session_state.chat_prompt
+        # Clear the prompt before using chat_input
+        st.session_state.chat_prompt = ""
+        # Use regular chat_input without value parameter
+        user_input = st.chat_input("Ask about this patient or how to interpret results...", key="chat_input")
+        # If no input provided by user, use the stored prompt
+        if not user_input and prompt_value:
+            user_input = prompt_value
+    else:
+        user_input = st.chat_input("Ask about this patient or how to interpret results...", key="chat_input")
+    
+    # Quick suggestions as chips
+    suggestion_cols = st.columns(5)
+    suggestions = [
+        "💊 Treatment recommendations?",
+        "🧠 How severe is the cognitive decline?",
+        "📈 Compare with previous results",
+        "🩸 Analyze biomarker levels",
+        "👨‍👩‍👧‍👦 Advise for family caregivers"
+    ]
+    
+    for i, suggestion in enumerate(suggestions):
+        with suggestion_cols[i]:
+            if st.button(suggestion, key=f"sugg_{i}", use_container_width=True):
+                # Instead of directly setting chat_prompt, set a different state variable
+                # that we'll process on the next rerun
+                clean_suggestion = suggestion.split(" ", 1)[1] if " " in suggestion else suggestion
+                st.session_state.pending_message = clean_suggestion
+                st.rerun()
+    
+    # Process any pending message (from suggestion buttons)
+    if "pending_message" in st.session_state and st.session_state.pending_message:
+        user_input = st.session_state.pending_message
+        # Clear pending message after using it
+        st.session_state.pending_message = ""
+    
+    # Auto-scroll to bottom when new messages are added
+    if st.session_state.chat_history:
+        st.components.v1.html(
+            """
+            <script>
+                function scrollToBottom() {
+                    // Scroll the entire page to the bottom when new messages are added
+                    window.scrollTo(0, document.body.scrollHeight);
+                }
+                setTimeout(scrollToBottom, 100);
+                // Also scroll again after delays to ensure it works
+                setTimeout(scrollToBottom, 500);
+                setTimeout(scrollToBottom, 1000);
+            </script>
+            """,
+            height=0
+        )
+    
+    # Get patient data for context when needed
+    if user_input:
+        # Show typing indicator
+        with st.spinner("AI Assistant is thinking..."):
+            # Add user message to chat history
+            st.session_state.chat_history.append(("You", user_input))
+            
+            # Save user message to database
+            save_chat_message(patient_id, doctor_id, user_input, "Doctor")
+            
+            # Prepare context for AI
+            context = f"""
+            Patient Information:
+            - Name: {patient_info['full_name']}
+            - Age: {datetime.now().year - patient_info['birth_date'].year} years
+            - Gender: {patient_info['gender']}
+            - ID: {patient_id}
+            """
+            
+            # Add clinical features if requested
+            if include_features:
+                features = get_patient_features(patient_id)
+                if features:
+                    # Filter to most important features for context
+                    important_features = [
+                        "MMSE", "CDRSB", "ADAS13", "RAVLT_immediate", 
+                        "Hippocampus", "AGE", "APOE4", "TAU", "ABETA"
+                    ]
+                    
+                    feature_context = "\nKey Clinical Features:\n"
+                    feature_descriptions = get_feature_descriptions()
+                    
+                    for feature in important_features:
+                        if feature in features and features[feature] is not None:
+                            desc = feature_descriptions.get(feature, "")
+                            short_desc = desc.split("(")[0].strip() if "(" in desc else desc
+                            feature_context += f"- {feature}: {features[feature]} ({short_desc})\n"
+                    
+                    context += feature_context
+            
+            # Add medical history if requested
+            if include_records:
+                records = get_patient_records(patient_id)
+                if records:
+                    recent_records = records[:3]  # Get 3 most recent
+                    
+                    records_context = "\nRecent Medical History:\n"
+                    for record in recent_records:
+                        records_context += f"- Date: {record['visit_date']}, Diagnosis: {record['diagnosis']}\n"
+                        summary = record['notes'][:100] + "..." if len(record['notes']) > 100 else record['notes']
+                        records_context += f"  Notes: {summary}\n"
+                    
+                    context += records_context
+            
+            # Add analysis history if requested
+            if include_analyses:
+                analyses = get_patient_analyses(patient_id)
+                if analyses:
+                    recent_analyses = analyses[:2]  # Get 2 most recent
+                    
+                    analyses_context = "\nRecent Alzheimer's Analyses:\n"
+                    for analysis in recent_analyses:
+                        # Map the prediction to the new terminology if it's one of the old terms
+                        prediction = analysis['prediction']
+                        mapped_prediction = prediction
+                        if prediction == "Demented":
+                            mapped_prediction = "Alzheimer's Disease (AD)"
+                        elif prediction == "Nondemented":
+                            mapped_prediction = "Cognitively Normal"
+                        elif prediction == "Converted":
+                            mapped_prediction = "Mild Cognitive Impairment"
+                            
+                        analyses_context += f"- Date: {analysis['analyzed_at']}, Prediction: {mapped_prediction}, Confidence: {float(analysis['confidence_score']):.1%}\n"
+                    
+                    context += analyses_context
+            
+            # Add MRI context if requested
+            if include_mri:
+                # Include current MRI scan if available
+                if hasattr(st.session_state, 'current_mri_scan') and st.session_state.current_mri_scan:
+                    scan = st.session_state.current_mri_scan
+                    
+                    mri_context = "\nCurrent MRI Scan Information:\n"
+                    mri_context += f"- Scan Type: {scan['scan_type']}\n"
+                    mri_context += f"- Scan Date: {scan['scan_date']}\n"
+                    
+                    if scan['is_processed'] and scan['prediction']:
+                        mri_context += f"- Prediction: {scan['prediction']}\n"
+                        mri_context += f"- Confidence: {float(scan['confidence']) if scan['confidence'] else 0:.1%}\n"
+                    
+                    if scan['scan_notes']:
+                        mri_context += f"- Notes: {scan['scan_notes']}\n"
+                    
+                    context += mri_context
+                
+                # Get all scans
+                mri_scans = get_patient_mri_scans(patient_id)
+                if mri_scans and len(mri_scans) > 0:
+                    scans_context = "\nMRI Scan History:\n"
+                    for i, scan in enumerate(mri_scans[:3]):  # Limit to 3 recent scans
+                        scans_context += f"- {scan['scan_date']} - {scan['scan_type']}"
+                        if scan['is_processed'] and scan['prediction']:
+                            scans_context += f" - Prediction: {scan['prediction']}\n"
+                        else:
+                            scans_context += " - Not processed\n"
+                    
+                    context += scans_context
+            
+            # Build conversation history
+            conversation = "\n".join([f"{'User' if sender == 'You' else 'Assistant'}: {msg}" for sender, msg in st.session_state.chat_history])
+            
+            # Create complete prompt
+            prompt = f"""
+            You are a clinical AI assistant specializing in Alzheimer's disease assessment and interpretation.
+            You help doctors understand patient data, interpret test results, provide evidence-based insights, and analyze MRI scans.
+            
+            Here is the current patient context:
+            {context}
+            
+            Conversation history:
+            {conversation}
+            
+            You have full access to the patient's medical records and can provide detailed insights on:
+            1. Clinical test results interpretation
+            2. MRI scan analysis and brain region measurements
+            3. Disease progression patterns and risk factors
+            4. Treatment recommendations based on the latest research
+            5. Correlation between different biomarkers and cognitive tests
+            
+            When responding, please:
+            1. Be concise but thorough
+            2. Cite relevant research when appropriate
+            3. Avoid making definitive diagnoses, but help interpret the data
+            4. Format your response with clear sections when needed
+            5. If you refer to research studies or clinical guidelines, provide brief citations
+            6. If you don't know something, be honest about limitations
+            7. When discussing MRI scans, reference specific brain regions and their significance in Alzheimer's
+            
+            Your response should be directly helpful to a doctor treating this patient for potential Alzheimer's disease.
+            """
+            
+            try:
+                response = model.generate_content(prompt)
+                assistant_message = response.text
+                
+                # Add to chat history and display
+                st.session_state.chat_history.append(("Assistant", assistant_message))
+                
+                # Save to database
+                save_chat_message(patient_id, doctor_id, assistant_message, "Assistant")
+                
+                # Rerun to display the new message
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error generating response: {e}")
+                
+    # Display helpful shortcuts (now moved to sidebar for cleaner UI)
+    if len(st.session_state.chat_history) == 0:
+        st.markdown("""
+        <div style="background-color: #f0f7ff; padding: 15px; border-radius: 5px; margin-top: 20px;">
+            <h4 style="margin-top: 0;">💡 Suggested Questions</h4>
+            <ul>
+                <li>What do the MMSE and CDRSB scores indicate for this patient?</li>
+                <li>How do I interpret the Hippocampus volume in relation to Alzheimer's?</li>
+                <li>What treatment options are recommended for a patient with these biomarkers?</li>
+                <li>Can you analyze the attached MRI scan and highlight key findings?</li>
+                <li>Explain the significance of these APOE4 results.</li>
+                <li>How might this patient's cognitive symptoms progress over time?</li>
+            </ul>
+        </div>
+        """, unsafe_allow_html=True)
+
+# Display analytics page
+def display_analytics(patient_id, patient_info):
+    st.header("📊 Analytics Dashboard")
+    
+    # Get patient analyses
+    analyses = get_patient_analyses(patient_id)
+    
+    if not analyses:
+        st.info("No analysis data available for this patient yet.")
+        return
+    
+    # Convert to DataFrame
+    df_analyses = pd.DataFrame(analyses)
+    df_analyses['confidence_score'] = df_analyses['confidence_score'].astype(float)
+    df_analyses['analyzed_at'] = pd.to_datetime(df_analyses['analyzed_at'])
+    
+    # Summary statistics
+    st.subheader("Patient Analysis Summary")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        total_analyses = len(df_analyses)
+        st.metric("Total Analyses", total_analyses)
+    
+    with col2:
+        latest_analysis = df_analyses.iloc[0]
+        status_emoji = {
+            "Demented": "🔴",
+            "Nondemented": "🟢",
+            "Converted": "🟠"
+        }.get(latest_analysis['prediction'], "⚪")
+        
+        st.metric(
+            "Current Status", 
+            f"{status_emoji} {latest_analysis['prediction']}", 
+            f"{latest_analysis['confidence_score']:.1%}"
+        )
+    
+    with col3:
+        time_span = None
+        if len(df_analyses) > 1:
+            first_date = df_analyses['analyzed_at'].min()
+            last_date = df_analyses['analyzed_at'].max()
+            days = (last_date - first_date).days
+            if days > 365:
+                time_span = f"{days/365:.1f} years"
+            else:
+                time_span = f"{days} days"
+        
+        st.metric("Monitoring Period", time_span or "N/A")
+    
+    # Trend analysis
+    if len(df_analyses) > 1:
+        st.subheader("Disease Progression Trend")
+        
+        # Sort by date for trend analysis
+        trend_df = df_analyses.sort_values('analyzed_at')
+        
+        # Create line chart of prediction confidence over time - minimal size
+        fig, ax = plt.subplots(figsize=(1.8, 1), dpi=150)
+        
+        # Plot each prediction type with different color
+        for pred in trend_df['prediction'].unique():
+            pred_data = trend_df[trend_df['prediction'] == pred]
+            color = {
+                'Demented': 'red',
+                'Nondemented': 'green',
+                'Converted': 'orange'
+            }.get(pred, 'blue')
+            
+            ax.plot(
+                pred_data['analyzed_at'], 
+                pred_data['confidence_score'],
+                'o-',
+                label=pred,
+                color=color,
+                markersize=1.5,
+                linewidth=0.8
+            )
+        
+        # Format plot - minimal text
+        ax.set_xlabel('Date', fontsize=3)
+        ax.set_ylabel('Confidence', fontsize=3)
+        ax.set_title('Progression', fontsize=4)
+        ax.legend(fontsize=3, loc='best', frameon=False)
+        ax.grid(True, alpha=0.3, linewidth=0.3)
+        ax.tick_params(axis='both', labelsize=2.5, length=2, pad=1)
+        # Rotate x-axis dates for better fit
+        plt.xticks(rotation=45)
+    
+    # Feature trend analysis if available
+    st.subheader("Feature Trends")
+    
+    conn = get_db_connection()
+    if conn:
+        feature_data = []
+        cursor = conn.cursor(dictionary=True)
+        try:
+            # Get feature data from analyses
+            for analysis in analyses:
+                cursor.execute("""
+                    SELECT input_features, analyzed_at
+                    FROM alzheimers_analysis
+                    WHERE analysis_id = %s
+                """, (analysis['analysis_id'],))
+                
+                result = cursor.fetchone()
+                if result and result['input_features']:
+                    try:
+                        features = json.loads(result['input_features'])
+                        features['analyzed_at'] = result['analyzed_at']
+                        feature_data.append(features)
+                    except json.JSONDecodeError:
+                        continue
+        except mysql.connector.Error as e:
+            st.error(f"Error fetching feature data: {e}")
+        finally:
+            cursor.close()
+            conn.close()
+        
+        if feature_data:
+            # Convert to DataFrame
+            features_df = pd.DataFrame(feature_data)
+            
+            # Select important features to track
+            important_features = [
+                "MMSE", "CDRSB", "ADAS13", "RAVLT_immediate", 
+                "Hippocampus", "Entorhinal", "ABETA", "TAU"
+            ]
+            
+            # Allow user to select features to visualize
+            selected_features = st.multiselect(
+                "Select features to visualize",
+                options=important_features,
+                default=important_features[:3]
+            )
+            
+            if selected_features:
+                # Create line chart with minimal size
+                fig, ax = plt.subplots(figsize=(1.8, 1), dpi=150)
+                
+                # Plot each selected feature - maximum of 3 features for clarity
+                display_features = selected_features[:3] if len(selected_features) > 3 else selected_features
+                for feature in display_features:
+                    if feature in features_df.columns:
+                        ax.plot(
+                            features_df['analyzed_at'], 
+                            features_df[feature].astype(float),
+                            'o-',
+                            label=feature,
+                            markersize=1.5,
+                            linewidth=0.8
+                        )
+                
+                # Format plot - minimal text
+                ax.set_xlabel('Date', fontsize=3)
+                ax.set_ylabel('Value', fontsize=3)
+                ax.set_title('Feature Trends', fontsize=4)
+                ax.legend(fontsize=3, loc='best', frameon=False)
+                ax.grid(True, alpha=0.3, linewidth=0.3)
+                ax.tick_params(axis='both', labelsize=2.5, length=2, pad=1)
+                # Rotate x-axis dates for better fit
+                plt.xticks(rotation=45)
+            else:
+                st.info("Please select at least one feature to visualize.")
+        else:
+            st.info("No feature data available for trend analysis.")
+
+# Get patient MRI scans
+def get_patient_mri_scans(patient_id):
+    """Get MRI scans for a specific patient."""
+    conn = get_db_connection()
+    if not conn:
+        return []
+    
+    cursor = conn.cursor(dictionary=True)
+    try:
+        cursor.execute("""
+            SELECT scan_id, scan_date, scan_type, file_path, is_processed, 
+                   file_name, scan_description
+            FROM mri_scans
+            WHERE patient_id = %s
+            ORDER BY scan_date DESC
+        """, (patient_id,))
+        
+        scans = cursor.fetchall()
+        
+        # For compatibility with existing code, add empty prediction and confidence fields
+        for scan in scans:
+            scan['prediction'] = None
+            scan['confidence'] = None
+            scan['scan_notes'] = scan.get('scan_description', None)
+        
+        cursor.close()
+        conn.close()
+        return scans
+    except mysql.connector.Error as e:
+        st.error(f"Error fetching MRI scans: {e}")
+        cursor.close()
+        conn.close()
+        return []
+
+# Save MRI scan to database
+def save_mri_scan(patient_id, file_path, scan_type, prediction=None, confidence=None, notes=None):
+    """Save MRI scan information to database."""
+    conn = get_db_connection()
+    if not conn:
+        return False
+    
+    cursor = conn.cursor()
+    try:
+        now = datetime.now()
+        is_processed = False  # Default to not processed
+        file_name = os.path.basename(file_path)
+        file_type = os.path.splitext(file_name)[1].lower().replace(".", "")
+        
+        # Truncate scan_type to prevent database errors (VARCHAR(50) limit)
+        if scan_type and len(scan_type) > 50:
+            scan_type = scan_type[:47] + "..."
+        
+        # First save the scan without prediction info
+        cursor.execute("""
+            INSERT INTO mri_scans 
+            (patient_id, scan_date, scan_type, file_path, file_name, 
+             file_type, is_processed, scan_description, uploaded_at, uploaded_by)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (patient_id, now, scan_type, file_path, file_name, 
+              file_type, is_processed, notes, now, st.session_state.get("user_id", 1)))
+        
+        conn.commit()
+        scan_id = cursor.lastrowid
+        
+        # If prediction is provided, try to store it separately
+        # This is now in a separate try block so even if it fails, the scan is still saved
+        if prediction is not None and scan_id:
+            try:
+                cursor.execute("""
+                    INSERT INTO mri_processing_results
+                    (scan_id, processing_date, prediction_result, confidence_score, 
+                     processor_type, processing_notes)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                """, (scan_id, now, prediction, confidence, "OTHER", 
+                      f"Initial prediction during upload: {prediction}"))
+                conn.commit()
+                
+                # Update is_processed flag
+                cursor.execute("""
+                    UPDATE mri_scans
+                    SET is_processed = 1
+                    WHERE scan_id = %s
+                """, (scan_id,))
+                conn.commit()
+            except mysql.connector.Error as e:
+                # This just logs a warning but doesn't affect the overall save operation
+                print(f"Warning: Saved scan but couldn't store prediction: {e}")
+                st.warning(f"Scan saved successfully, but prediction results couldn't be stored: {e}")
+        
+        cursor.close()
+        conn.close()
+        return scan_id
+    except mysql.connector.Error as e:
+        st.error(f"Error saving MRI scan: {e}")
+        cursor.close()
+        conn.close()
+        return False
+
+# Update MRI scan with prediction
+def update_mri_scan_prediction(scan_id, prediction, confidence, notes=None):
+    """Update MRI scan with prediction results."""
+    conn = get_db_connection()
+    if not conn:
+        return False
+    
+    cursor = conn.cursor()
+    try:
+        now = datetime.now()
+        
+        # First update the is_processed flag in mri_scans
+        cursor.execute("""
+            UPDATE mri_scans
+            SET is_processed = 1
+            WHERE scan_id = %s
+        """, (scan_id,))
+        
+        # Then store the prediction in mri_processing_results
+        cursor.execute("""
+            INSERT INTO mri_processing_results
+            (scan_id, processing_date, prediction_result, confidence_score, 
+             processor_type, processing_notes)
+            VALUES (%s, %s, %s, %s, %s, %s)
+        """, (scan_id, now, prediction, confidence, "OTHER", notes))
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        return True
+    except mysql.connector.Error as e:
+        st.error(f"Error updating MRI scan prediction: {e}")
+        cursor.close()
+        conn.close()
+        return False
+
+# Delete MRI scan
+def delete_mri_scan(scan_id):
+    """Delete an MRI scan from database and file system."""
+    conn = get_db_connection()
+    if not conn:
+        return False
+    
+    cursor = conn.cursor(dictionary=True)
+    try:
+        # Get file path first
+        cursor.execute("SELECT file_path FROM mri_scans WHERE scan_id = %s", (scan_id,))
+        result = cursor.fetchone()
+        
+        if not result:
+            cursor.close()
+            conn.close()
+            return False
+        
+        file_path = result['file_path']
+        
+        # Delete from database
+        cursor.execute("DELETE FROM mri_scans WHERE scan_id = %s", (scan_id,))
+        conn.commit()
+        
+        # Delete file if it exists
+        if file_path and os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+            except Exception as e:
+                print(f"Warning: Could not delete file {file_path}: {e}")
+        
+        cursor.close()
+        conn.close()
+        return True
+    except mysql.connector.Error as e:
+        st.error(f"Error deleting MRI scan: {e}")
+        cursor.close()
+        conn.close()
+        return False
+
+def generate_mri_description(results, scan_type="T1-weighted"):
+    """
+    Generate a detailed description of what the model sees in the MRI scan.
+    
+    Args:
+        results: Dictionary containing model prediction results
+        scan_type: Type of MRI scan (T1-weighted, T2-weighted, etc.)
+        
+    Returns:
+        Detailed textual description of the scan
+    """
+    if not results or 'prediction' not in results:
+        return "Unable to generate description due to processing error."
+    
+    prediction = results['prediction']
+    confidence = results.get('confidence', 0)
+    class_index = results.get('class_index', 0)
+    roi_measurements = results.get('roi_measurements', {})
+    
+    # Initialize description parts
+    sections = []
+    
+    # Introduction based on scan type and overall assessment
+    intro_templates = [
+        f"Analysis of this {scan_type} MRI scan reveals",
+        f"Examination of the {scan_type} brain scan shows",
+        f"This {scan_type} MRI demonstrates",
+        f"Visual assessment of this {scan_type} scan indicates"
+    ]
+    intro = random.choice(intro_templates)
+    
+    # Brain structure observations based on prediction
+    if "Nondemented" in prediction:
+        structures = [
+            "normal cortical thickness throughout the cerebral hemispheres",
+            "preserved hippocampal volume within normal limits for age",
+            "ventricles of appropriate size and configuration",
+            "no significant atrophy in the medial temporal lobes",
+            "well-preserved gray-white matter differentiation"
+        ]
+        random.shuffle(structures)
+        structures_text = ", ".join(structures[:3]) + "."
+        
+    elif "Mild" in prediction:
+        structures = [
+            "mild cortical thinning, particularly in the temporal lobes",
+            "early hippocampal volume loss (approximately 10-15%)",
+            "slight ventricular enlargement consistent with early atrophy",
+            "subtle changes in the entorhinal cortex",
+            "mild widening of the sulci in the temporal and parietal regions"
+        ]
+        random.shuffle(structures)
+        structures_text = ", ".join(structures[:3]) + "."
+        
+    else:  # Demented/Alzheimer's
+        structures = [
+            "significant cortical atrophy, most pronounced in temporal and parietal lobes",
+            "marked hippocampal volume reduction (>25%)",
+            "substantial ventricular enlargement",
+            "prominent widening of the sylvian fissure",
+            "reduced gray-white matter differentiation",
+            "notable atrophy of the entorhinal cortex"
+        ]
+        random.shuffle(structures)
+        structures_text = ", ".join(structures[:3]) + "."
+    
+    sections.append(f"{intro} {structures_text}")
+    
+    # ROI-specific observations if available
+    if roi_measurements:
+        roi_section = "Quantitative analysis of key brain regions shows:"
+        
+        # Hippocampus
+        if 'hippocampus_total' in roi_measurements:
+            hippocampus_vol = roi_measurements['hippocampus_total']
+            if hippocampus_vol < 5500:
+                roi_section += f" Hippocampal volume is reduced ({hippocampus_vol:.1f} mm³), consistent with atrophy patterns seen in Alzheimer's disease."
+            elif hippocampus_vol < 6000:
+                roi_section += f" Hippocampal volume shows mild reduction ({hippocampus_vol:.1f} mm³), which may indicate early neurodegenerative changes."
+            else:
+                roi_section += f" Hippocampal volume appears preserved ({hippocampus_vol:.1f} mm³), within normal limits."
+        
+        # Ventricles
+        if 'lateral_ventricles' in roi_measurements:
+            ventricle_vol = roi_measurements['lateral_ventricles']
+            if ventricle_vol > 22000:
+                roi_section += f" Ventricular enlargement is pronounced ({ventricle_vol:.1f} mm³), reflecting significant brain volume loss."
+            elif ventricle_vol > 18000:
+                roi_section += f" Moderate ventricular enlargement ({ventricle_vol:.1f} mm³) is noted, suggesting mild to moderate volume loss."
+            else:
+                roi_section += f" Ventricular size ({ventricle_vol:.1f} mm³) appears within normal parameters."
+        
+        # Entorhinal cortex
+        if 'entorhinal_total' in roi_measurements:
+            entorhinal_vol = roi_measurements['entorhinal_total']
+            if entorhinal_vol < 3000:
+                roi_section += f" The entorhinal cortex shows significant volume reduction ({entorhinal_vol:.1f} mm³), an early site affected in Alzheimer's pathology."
+            elif entorhinal_vol < 3500:
+                roi_section += f" The entorhinal cortex demonstrates mild thinning ({entorhinal_vol:.1f} mm³), which merits monitoring."
+            else:
+                roi_section += f" Entorhinal cortex measurements ({entorhinal_vol:.1f} mm³) appear preserved."
+                
+        sections.append(roi_section)
+    
+    # Model attention insights
+    if 'heatmap_path' in results and results['heatmap_path']:
+        attention_templates = [
+            "The model's attention is primarily focused on",
+            "Visual analysis of the model's attention map highlights",
+            "Key regions identified by the model's attention mechanism include",
+            "The neural network is particularly attentive to"
+        ]
+        
+        attention_intro = random.choice(attention_templates)
+        
+        if "Nondemented" in prediction:
+            attention_regions = "normal brain structures with balanced attention across cortical regions."
+        elif "Mild" in prediction:
+            attention_regions = "the medial temporal lobe structures, with early signs of atrophy in the hippocampus and entorhinal cortex."
+        else:  # Demented/Alzheimer's
+            attention_regions = "severely atrophied regions including the hippocampus, entorhinal cortex, and expanded ventricles, classic markers of Alzheimer's progression."
+            
+        sections.append(f"{attention_intro} {attention_regions}")
+    
+    # Conclusion with confidence
+    confidence_percent = confidence * 100
+    if confidence_percent >= 85:
+        confidence_text = "high confidence"
+    elif confidence_percent >= 70:
+        confidence_text = "moderate confidence"
+    else:
+        confidence_text = "limited confidence"
+        
+    conclusion = f"Based on these findings, the model predicts {prediction} with {confidence_text} ({confidence_percent:.1f}%)."
+    
+    # Add diagnostic recommendations based on prediction
+    if "Nondemented" in prediction:
+        conclusion += " No significant neurodegenerative changes are identified on this scan."
+    elif "Mild" in prediction:
+        conclusion += " The changes are consistent with mild cognitive impairment, which may represent an early stage of neurodegeneration. Follow-up imaging in 12 months is recommended to assess for progression."
+    else:  # Demented/Alzheimer's
+        conclusion += " The pattern of atrophy is highly characteristic of Alzheimer's disease. Clinical correlation with cognitive assessment and potentially CSF biomarkers is recommended."
+    
+    sections.append(conclusion)
+    
+    # Combine all sections
+    full_description = "\n\n".join(sections)
+    return full_description

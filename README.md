@@ -1,178 +1,138 @@
-# Hospital Management System
+# Alzheimer's Diagnosis System
 
-![Hospital Management System](https://img.shields.io/badge/Hospital%20Management%20System-Healthcare-blue)
-![Python](https://img.shields.io/badge/Python-3.8+-green)
-![Streamlit](https://img.shields.io/badge/Streamlit-1.22+-red)
-![MySQL](https://img.shields.io/badge/MySQL-8.0+-orange)
-![XGBoost](https://img.shields.io/badge/XGBoost-1.5+-purple)
-
-A comprehensive hospital management system built with Streamlit, featuring patient management, doctor scheduling, and AI-powered disease prediction.
-
-## Table of Contents
-
-- [Features](#features)
-- [Technology Stack](#technology-stack)
-- [Project Structure](#project-structure)
-- [Getting Started](#getting-started)
-  - [Prerequisites](#prerequisites)
-  - [Installation](#installation)
-- [Usage](#usage)
-- [Key Components](#key-components)
-- [Data Visualization](#data-visualization)
-- [Security](#security)
-- [Contributing](#contributing)
-- [License](#license)
-- [Acknowledgments](#acknowledgments)
+A comprehensive web application for Alzheimer's disease diagnosis that combines clinical data analysis, MRI scan processing, and AI-assisted diagnosis.
 
 ## Features
 
 ### For Doctors
-- **Patient Management**: Add, view, and manage patient information.
-- **Alzheimer's Analysis**: Run machine learning-based predictions on patient data.
-- **Medical Records**: Maintain comprehensive patient medical history.
-- **AI Clinical Assistant**: Get AI-powered insights about patients.
-- **Analytics Dashboard**: Visualize patient data and trends.
+- Patient management
+- Alzheimer's analysis using machine learning models
+- MRI scan processing with CNN and SWIN Transformer models
+- Medical records management
+- AI-assisted clinical consultation 
+- Detailed scan interpretation and visualizations
+- ROI measurements for brain structures
+
+### For Patients (New)
+- Online self-registration
+- Appointment scheduling
+- View medical records and test results
+- Update personal information
+- Access to Alzheimer's assessment results
+- View MRI scan history
 
 ### For Administrators
-- **User Management**: Create and manage doctor accounts.
-- **Doctor Management**: Add and manage doctor profiles.
-- **Patient Management**: Oversee all patient records.
-- **Prediction Logs**: Monitor all Alzheimer's predictions.
-- **Appointment Scheduling**: Manage patient appointments.
+- User management
+- System monitoring
+- Data analytics
 
-## Technology Stack
+## Tech Stack
 
-- **Frontend**: Streamlit
-- **Backend**: Python
-- **Database**: MySQL
-- **Machine Learning**: XGBoost
-- **AI Assistant**: Google Gemini API
+- Frontend: Streamlit
+- Backend: Python
+- Database: MySQL
+- AI Components: 
+  - XGBoost model for clinical data analysis
+  - CNN (ResNet50) and SWIN Transformer for MRI analysis
+  - Google's Gemini Pro model for natural language generation
 
-## Project Structure
+## System Requirements
 
-```
-hospital_management_system/
-├── app.py                   # Main application entry point
-├── streamlit_app/           # Contains the Streamlit application code
-│   ├── admin_view.py        # Admin interface
-│   ├── doctor_view.py       # Doctor interface
-│   ├── patient_view.py      # Patient interface
-├── database/                # Database-related files
-│   ├── db_creation.py       # Database initialization script
-│   ├── db_creation.sql      # SQL schema
-├── models/                  # Machine learning models
-│   └── XGBoost_model.joblib  # Trained XGBoost model
-├── utils/                   # Utility functions
-└── requirements.txt         # Python dependencies
-```
+- Python 3.9+
+- MySQL 8.0+
+- 8GB RAM or more (for running MRI analysis models)
+- Internet connection (for AI assistant functionality)
 
-## Getting Started
+## Quick Start Guide
 
-### Prerequisites
-
-- Python 3.8 or higher
-- MySQL 8.0 or higher
-- Streamlit
-- XGBoost
-- Google Gemini API key
-
-### Installation
-
-1. **Clone the repository**:
+1. **Install MySQL**
+   - Make sure MySQL 8.0+ is installed and running
+   - Create a database named `smart_clinic`
+   
+2. **Install Python dependencies**
    ```bash
-   git clone https://github.com/yourusername/hospital-management-system.git
-   cd hospital-management-system
+   pip install streamlit mysql-connector-python pandas numpy matplotlib google-generativeai python-dotenv joblib scikit-learn
    ```
 
-2. **Create a virtual environment**:
+3. **Start the application**
    ```bash
-   python -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
-   ```
-
-3. **Install dependencies**:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-4. **Set up environment variables**:
-   Create a `.env` file in the root directory with the following variables:
-   ```plaintext
-   DB_HOST=your_database_host
-   DB_USER=your_database_user
-   DB_PASSWORD=your_database_password
-   DB_NAME=your_database_name
-   GOOGLE_API_KEY=your_google_api_key
-   ```
-
-5. **Initialize the database**:
-   ```bash
-   python database/db_creation.py
-   ```
-
-## Usage
-
-1. **Start the Streamlit app**:
-   ```bash
+   cd streamlit_app
    streamlit run app.py
    ```
 
-2. **Access the application** at `http://localhost:8501`.
+4. **Access the web interface**
+   - Open your browser and go to: http://localhost:8501
 
-3. **Log in with the default credentials**:
-   - Admin: username: `admin1`, password: `admin1`
-   - Doctor: username: `dr.shaker`, password: `dr.shaker`
+## Database Setup
 
-## Key Components
+If you need to manually update the database schema:
 
-### Machine Learning Model
+```bash
+cd streamlit_app
+python -c "from deploy import update_database_schema; update_database_schema()"
+```
 
-The application uses an XGBoost model trained on Alzheimer's disease data to predict patient outcomes. The model analyzes various clinical features including:
+## Usage
 
-- Cognitive test scores (MMSE, CDRSB, ADAS13)
-- Memory test results (RAVLT)
-- Brain measurements (Hippocampus volume)
-- Biomarkers (APOE4, TAU, ABETA)
+### Doctor Portal
 
-### AI Clinical Assistant
+Log in using your doctor credentials to:
+- Manage patients
+- Perform Alzheimer's analyses
+- Process MRI scans
+- View and update medical records
+- Use AI-assisted consultation
 
-The AI assistant uses Google's Gemini API to provide intelligent insights about patients. It can:
+### Patient Portal
 
-- Interpret test results
-- Suggest treatment options
-- Provide research-backed recommendations
-- Answer questions about patient data
+1. Click on the "Patient Portal" button on the login page
+2. Register a new account or log in with existing credentials
+3. Schedule new appointments
+4. View upcoming and past appointments
+5. Access medical records and test results
+6. Update personal information
 
-## Data Visualization
+### Admin Portal
 
-The application includes various visualizations:
+Log in using admin credentials to:
+- Manage user accounts
+- Monitor system usage
+- View analytics
 
-- Feature importance plots
-- Probability distribution charts
-- Disease progression trends
-- Patient analytics dashboards
+## Online Deployment
 
-## Security
+The system can be deployed online using:
 
-- Role-based access control (Admin/Doctor)
-- Secure password authentication
-- Database connection security
+1. Streamlit Sharing: https://streamlit.io/sharing
+2. Docker container with Docker Compose
+3. Cloud services like AWS, Azure, or Google Cloud
 
-## Contributing
+For online deployment, make sure to:
+- Configure a secure database connection
+- Set up proper authentication
+- Configure environment variables for sensitive information
 
-1. Fork the repository
-2. Create a feature branch
-3. Commit your changes
-4. Push to the branch
-5. Create a Pull Request
+## Troubleshooting
+
+**MySQL Connection Issues**
+- Verify MySQL is running
+- Check connection parameters in DB_CONFIG within app.py
+- Ensure the smart_clinic database exists
+
+**Missing Dependencies**
+- Run `pip install -r requirements.txt` to install all dependencies
+
+**Database Schema Issues**
+- Run the database update script manually:
+  ```python
+  from deploy import update_database_schema
+  update_database_schema()
+  ```
 
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
 
-## Acknowledgments
+## Support
 
-- Alzheimer's Disease Neuroimaging Initiative (ADNI) for data
-- Google Gemini for AI capabilities
-- Streamlit for the web framework
-- XGBoost for the machine learning model
+For support, please contact the development team at support@example.com

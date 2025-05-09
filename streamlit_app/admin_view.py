@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import mysql.connector
 from datetime import datetime, timedelta, time
+from payment_management import manage_payments_and_invoices
 
 # Database connection parameters
 DB_CONFIG = {
@@ -22,25 +23,117 @@ def get_db_connection():
 
 def admin_panel():
     """Admin dashboard for managing users, doctors, patients, and logs."""
-    st.set_page_config(page_title="Admin Panel", layout="wide")
-    st.title("🔐 Admin Dashboard")
-
-    # Logout button in sidebar
-    if st.sidebar.button("🚪 Sign Out"):
-        st.session_state.clear()
-        st.success("You have been signed out.")
-        st.rerun()
     
-    # Connect to database
-    conn = get_db_connection()
-    if not conn:
-        st.error("❌ Failed to connect to the database.")
-        return
-    cursor = conn.cursor()
+    # Apply custom styling
+    st.markdown("""
+    <style>
+        /* Admin panel specific styles */
+        .admin-header {
+            background: linear-gradient(to right, #1e3a8a, #3b82f6);
+            color: white;
+            padding: 1.5rem;
+            border-radius: 10px;
+            margin-bottom: 1.5rem;
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+        
+        .admin-header h1 {
+            margin: 0;
+            color: white;
+            font-size: 2.2rem;
+            border-bottom: none;
+        }
+        
+        .metric-card {
+            background-color: white;
+            border-radius: 10px;
+            padding: 1.2rem;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+            border: 1px solid #e5e7eb;
+            text-align: center;
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+        
+        .metric-card:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+        }
+        
+        .metric-icon {
+            font-size: 2.2rem;
+            margin-bottom: 0.5rem;
+            color: #3b82f6;
+        }
+        
+        .metric-value {
+            font-size: 1.8rem;
+            font-weight: 700;
+            color: #1e3a8a;
+            margin: 0.3rem 0;
+        }
+        
+        .metric-label {
+            font-size: 0.9rem;
+            color: #6b7280;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        
+        .form-card {
+            background-color: white;
+            border-radius: 10px;
+            padding: 1.5rem;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+            border: 1px solid #e5e7eb;
+            margin-bottom: 1.5rem;
+        }
+        
+        .tab-content {
+            padding: 1.5rem 0;
+        }
+        
+        /* Improve table appearance */
+        .dataframe {
+            font-size: 0.9rem;
+        }
+        
+        .dataframe th {
+            background-color: #f1f5f9;
+            font-weight: 600;
+        }
+    </style>
+    """, unsafe_allow_html=True)
+    
+    # Custom header
+    st.markdown("""
+    <div class="admin-header">
+        <div style="font-size: 2.5rem;">🔐</div>
+        <h1>Admin Dashboard</h1>
+    </div>
+    """, unsafe_allow_html=True)
 
-    # Sidebar with stats
+    # Improved sidebar
     with st.sidebar:
-        st.subheader("📊 System Statistics")
+        # Center logo with larger size
+        st.markdown("<div style='text-align: center;'>", unsafe_allow_html=True)
+        st.image("logo.png", width=120)
+        st.markdown("</div>", unsafe_allow_html=True)
+        
+        st.title("Clinexa Admin")
+        st.caption("Beyond Data. Beyond Care.")
+        
+        st.markdown("#### Navigation")
+        st.markdown("---")
+        st.markdown("### 📊 System Overview")
+        
+        # Connect to database
+        conn = get_db_connection()
+        if not conn:
+            st.error("❌ Failed to connect to the database.")
+            return
+        cursor = conn.cursor()
         
         # Count users
         cursor.execute("SELECT COUNT(*) FROM users")
@@ -58,69 +151,170 @@ def admin_panel():
         cursor.execute("SELECT COUNT(*) FROM alzheimers_analysis")
         analysis_count = cursor.fetchone()[0]
         
-        # Display stats
-        st.metric("Total Users", user_count)
-        st.metric("Doctors", doctor_count)
-        st.metric("Patients", patient_count)
-        st.metric("Analyses", analysis_count)
+        # Count MRI scans
+        cursor.execute("SELECT COUNT(*) FROM mri_scans")
+        mri_count = cursor.fetchone()[0]
+        
+        # Count invoices
+        cursor.execute("SELECT COUNT(*) FROM invoices")
+        invoice_count = cursor.fetchone()[0]
+        
+        # Display improved stats with icons
+        st.markdown("""
+        <div class="metric-card">
+            <div class="metric-icon">👥</div>
+            <div class="metric-value">{}</div>
+            <div class="metric-label">Users</div>
+        </div>
+        """.format(user_count), unsafe_allow_html=True)
+        
+        st.markdown("""
+        <div class="metric-card">
+            <div class="metric-icon">🧑‍⚕️</div>
+            <div class="metric-value">{}</div>
+            <div class="metric-label">Doctors</div>
+        </div>
+        """.format(doctor_count), unsafe_allow_html=True)
+        
+        st.markdown("""
+        <div class="metric-card">
+            <div class="metric-icon">🧑‍🤝‍🧑</div>
+            <div class="metric-value">{}</div>
+            <div class="metric-label">Patients</div>
+        </div>
+        """.format(patient_count), unsafe_allow_html=True)
+        
+        st.markdown("""
+        <div class="metric-card">
+            <div class="metric-icon">🧠</div>
+            <div class="metric-value">{}</div>
+            <div class="metric-label">Analyses</div>
+        </div>
+        """.format(analysis_count), unsafe_allow_html=True)
+        
+        # Divider
+        st.markdown("---")
+        
+        # Sign out button with improved styling
+        if st.button("🚪 Sign Out", use_container_width=True, type="primary", key="admin_view_logout"):
+            st.session_state.clear()
+            st.success("You have been signed out.")
+            st.rerun()
 
     # Tabs for different admin functions
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        "👥 Users", "🧑‍⚕️ Doctors", "🧑‍🤝‍🧑 Patients", "🧠 Prediction Logs", "📅 Appointments"
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+        "👥 Users", "🧑‍⚕️ Doctors", "🧑‍🤝‍🧑 Patients", "🧠 Prediction Logs", "📅 Appointments", "💰 Payments"
     ])
 
     # USERS TAB
     with tab1:
-        st.subheader("Manage Users")
+        st.markdown("""
+        <div style="display: flex; align-items: center; margin-bottom: 1rem;">
+            <div style="font-size: 1.8rem; margin-right: 0.5rem;">👥</div>
+            <h2 style="margin: 0;">User Management</h2>
+        </div>
+        """, unsafe_allow_html=True)
         
         # Get all users
         cursor.execute("SELECT id, username, role FROM users")
         users = cursor.fetchall()
+        
+        # Create a dataframe with better structure
         df_users = pd.DataFrame(users, columns=["ID", "Username", "Role"])
         
-        # Display users with row highlighting
-        st.dataframe(df_users, use_container_width=True)
-
+        # Apply styling to roles
+        def highlight_role(role):
+            if role == 'admin':
+                return 'background-color: #e0f2fe; color: #0369a1; font-weight: 600; padding: 2px 8px; border-radius: 4px;'
+            elif role == 'doctor':
+                return 'background-color: #dcfce7; color: #166534; font-weight: 600; padding: 2px 8px; border-radius: 4px;'
+            return ''
+        
+        # Style the dataframe
+        styled_df = df_users.style.applymap(highlight_role, subset=['Role'])
+        
+        # Display users with enhanced styling
+        st.dataframe(styled_df, use_container_width=True, height=300)
+        
+        # User management actions in a visually appealing card layout
+        st.markdown("<div class='form-card'>", unsafe_allow_html=True)
+        
         # Two columns for Add User and Delete User
         col1, col2 = st.columns(2)
         
-        # Add new user
+        # Add new user with improved form
         with col1:
-            st.markdown("### ➕ Add New User")
-            new_username = st.text_input("Username").strip()
-            new_password = st.text_input("Password", type="password").strip()
-            new_role = st.selectbox("Role", ["admin", "doctor"])
-            if st.button("Add User"):
-                if new_username and new_password:
-                    try:
-                        # Insert user without hashing password
-                        cursor.execute(
-                            "INSERT INTO users (username, password, role) VALUES (%s, %s, %s)",
-                            (new_username, new_password, new_role)
-                        )
-                        conn.commit()
-                        st.success("✅ User added successfully.")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Error adding user: {e}")
-                else:
-                    st.warning("Please fill in all fields.")
+            st.markdown("""
+            <div style="display: flex; align-items: center; margin-bottom: 1rem;">
+                <div style="font-size: 1.4rem; margin-right: 0.5rem; color: #3b82f6;">➕</div>
+                <h3 style="margin: 0; color: #1e3a8a;">Add New User</h3>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            with st.form(key="add_user_form"):
+                new_username = st.text_input("Username", key="new_username", placeholder="Enter username").strip()
+                new_password = st.text_input("Password", type="password", key="new_password", placeholder="Enter secure password").strip()
+                new_role = st.selectbox("Role", ["admin", "doctor"], key="new_role")
+                
+                # Description of roles
+                st.markdown("""
+                <div style="margin-top: 0.5rem; font-size: 0.9rem; color: #6b7280;">
+                    <strong>Admin:</strong> Full system access<br>
+                    <strong>Doctor:</strong> Patient management and diagnosis access
+                </div>
+                """, unsafe_allow_html=True)
+                
+                add_user_submit = st.form_submit_button("Add User", type="primary", use_container_width=True)
+                if add_user_submit:
+                    if new_username and new_password:
+                        try:
+                            # Insert user without hashing password
+                            cursor.execute(
+                                "INSERT INTO users (username, password, role) VALUES (%s, %s, %s)",
+                                (new_username, new_password, new_role)
+                            )
+                            conn.commit()
+                            st.success("✅ User added successfully.")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error adding user: {e}")
+                    else:
+                        st.warning("⚠️ Please fill in all fields.")
         
-        # Delete user
+        # Delete user with improved UI
         with col2:
-            st.markdown("### 🗑️ Delete User")
+            st.markdown("""
+            <div style="display: flex; align-items: center; margin-bottom: 1rem;">
+                <div style="font-size: 1.4rem; margin-right: 0.5rem; color: #ef4444;">🗑️</div>
+                <h3 style="margin: 0; color: #1e3a8a;">Delete User</h3>
+            </div>
+            """, unsafe_allow_html=True)
+            
             if not df_users.empty:
-                user_to_delete = st.selectbox("Select user to delete", df_users["Username"])
-                if st.button("Delete User", type="primary", help="This action cannot be undone"):
-                    try:
-                        cursor.execute("DELETE FROM users WHERE username = %s", (user_to_delete,))
-                        conn.commit()
-                        st.success(f"✅ User {user_to_delete} deleted successfully.")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Error deleting user: {e}")
+                with st.form(key="delete_user_form"):
+                    user_to_delete = st.selectbox("Select user to delete", df_users["Username"], key="user_to_delete")
+                    
+                    # Warning message
+                    st.markdown("""
+                    <div style="background-color: #fef2f2; border-left: 4px solid #ef4444; padding: 0.8rem; margin: 1rem 0; border-radius: 4px;">
+                        <div style="font-weight: 600; color: #b91c1c; margin-bottom: 0.3rem;">⚠️ Warning</div>
+                        <div style="color: #7f1d1d; font-size: 0.9rem;">This action cannot be undone. All user data will be permanently deleted.</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    delete_user_submit = st.form_submit_button("Delete User", use_container_width=True)
+                    if delete_user_submit:
+                        try:
+                            cursor.execute("DELETE FROM users WHERE username = %s", (user_to_delete,))
+                            conn.commit()
+                            st.success(f"✅ User {user_to_delete} deleted successfully.")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error deleting user: {e}")
             else:
                 st.info("No users to delete.")
+                
+        st.markdown("</div>", unsafe_allow_html=True)
 
     # DOCTORS TAB
     with tab2:
@@ -163,22 +357,29 @@ def admin_panel():
         # Delete doctor
         if not df_doctors.empty:
             st.markdown("### 🗑️ Delete Doctor")
-            doctor_to_delete = st.selectbox("Select doctor to delete", 
-                                         df_doctors["Full Name"])
-            if st.button("Delete Doctor", help="This action cannot be undone"):
-                try:
-                    # Get doctor ID first
-                    cursor.execute("SELECT doctor_id FROM doctors WHERE full_name = %s", 
-                                (doctor_to_delete,))
-                    doctor_id = cursor.fetchone()[0]
-                    
-                    # Delete the doctor
-                    cursor.execute("DELETE FROM doctors WHERE doctor_id = %s", (doctor_id,))
-                    conn.commit()
-                    st.success(f"✅ Doctor {doctor_to_delete} deleted successfully.")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Error deleting doctor: {e}")
+            
+            with st.form(key="delete_doctor_form"):
+                doctor_to_delete = st.selectbox(
+                    "Select doctor to delete", 
+                    df_doctors["Full Name"],
+                    key="doctor_to_delete"
+                )
+                
+                delete_doctor_submit = st.form_submit_button("Delete Doctor", help="This action cannot be undone")
+                if delete_doctor_submit:
+                    try:
+                        # Get doctor ID first
+                        cursor.execute("SELECT doctor_id FROM doctors WHERE full_name = %s", 
+                                    (doctor_to_delete,))
+                        doctor_id = cursor.fetchone()[0]
+                        
+                        # Delete the doctor
+                        cursor.execute("DELETE FROM doctors WHERE doctor_id = %s", (doctor_id,))
+                        conn.commit()
+                        st.success(f"✅ Doctor {doctor_to_delete} deleted successfully.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error deleting doctor: {e}")
 
     # PATIENTS TAB
     with tab3:
@@ -186,12 +387,12 @@ def admin_panel():
         
         # Get all patients
         cursor.execute("""
-            SELECT patient_id, full_name, gender, birth_date, contact_info, address, created_at
+            SELECT patient_id, full_name, gender, birth_date, contact_info, address
             FROM patients
         """)
         patients = cursor.fetchall()
         df_patients = pd.DataFrame(patients, columns=[
-            "ID", "Name", "Gender", "Birthdate", "Contact", "Address", "Registered"
+            "ID", "Name", "Gender", "Birthdate", "Contact", "Address"
         ])
         
         # Display patients
@@ -216,9 +417,9 @@ def admin_panel():
                         try:
                             cursor.execute("""
                                 INSERT INTO patients 
-                                (full_name, gender, birth_date, contact_info, address, created_at)
-                                VALUES (%s, %s, %s, %s, %s, %s)
-                            """, (name, gender, birthdate, contact, address, datetime.now()))
+                                (full_name, gender, birth_date, contact_info, address)
+                                VALUES (%s, %s, %s, %s, %s)
+                            """, (name, gender, birthdate, contact, address))
                             conn.commit()
                             st.success("✅ Patient added successfully.")
                             st.rerun()
@@ -255,6 +456,15 @@ def admin_panel():
                 """, (patient_id,))
                 analyses = cursor.fetchall()
                 
+                # Get MRI scans
+                cursor.execute("""
+                    SELECT scan_type, scan_date, is_processed
+                    FROM mri_scans
+                    WHERE patient_id = %s
+                    ORDER BY scan_date DESC
+                """, (patient_id,))
+                mri_scans = cursor.fetchall()
+                
                 # Display medical records
                 st.markdown("#### Medical Records")
                 if records:
@@ -271,16 +481,27 @@ def admin_panel():
                 else:
                     st.info("No analysis results found.")
                 
+                # Display MRI scans
+                st.markdown("#### MRI Scans")
+                if mri_scans:
+                    df_mri = pd.DataFrame(mri_scans, columns=["Type", "Date", "Processed"])
+                    st.dataframe(df_mri, use_container_width=True)
+                else:
+                    st.info("No MRI scans found.")
+                
                 # Delete patient button
-                if st.button("🗑️ Delete Patient", type="primary", help="This will delete all patient data"):
-                    try:
-                        # Delete patient and all related records
-                        cursor.execute("DELETE FROM patients WHERE patient_id = %s", (patient_id,))
-                        conn.commit()
-                        st.success(f"✅ Patient {patient_to_view} deleted successfully.")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Error deleting patient: {e}")
+                with st.form(key="delete_patient_form"):
+                    st.warning("This will delete the patient and all associated data!")
+                    delete_patient_submit = st.form_submit_button("🗑️ Delete Patient", help="This will delete all patient data")
+                    if delete_patient_submit:
+                        try:
+                            # Delete patient and all related records
+                            cursor.execute("DELETE FROM patients WHERE patient_id = %s", (patient_id,))
+                            conn.commit()
+                            st.success(f"✅ Patient {patient_to_view} deleted successfully.")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error deleting patient: {e}")
 
     # PREDICTION LOGS TAB
     with tab4:
@@ -363,19 +584,27 @@ def admin_panel():
             # Update appointment status
             st.markdown("### ✏️ Update Appointment Status")
             appt_id = st.selectbox("Select appointment", filtered_appts["ID"].tolist())
-            new_status = st.selectbox("New status", ["Scheduled", "Completed", "Cancelled"])
             
-            if st.button("Update Status"):
-                try:
-                    cursor.execute(
-                        "UPDATE appointments SET status = %s WHERE appointment_id = %s",
-                        (new_status, appt_id)
-                    )
-                    conn.commit()
-                    st.success(f"✅ Appointment status updated to {new_status}.")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Error updating appointment: {e}")
+            # Create a form for updating the appointment status
+            with st.form(key="update_appointment_form"):
+                new_status = st.selectbox(
+                    "New status", 
+                    ["Scheduled", "Completed", "Cancelled"],
+                    key="new_status_selectbox"
+                )
+                
+                update_status_submit = st.form_submit_button("Update Status")
+                if update_status_submit:
+                    try:
+                        cursor.execute(
+                            "UPDATE appointments SET status = %s WHERE appointment_id = %s",
+                            (new_status, appt_id)
+                        )
+                        conn.commit()
+                        st.success(f"✅ Appointment status updated to {new_status}.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error updating appointment: {e}")
         else:
             st.info("No appointments found.")
         
@@ -436,6 +665,10 @@ def admin_panel():
                         st.error(f"Error scheduling appointment: {e}")
                 else:
                     st.warning("Please complete all required fields.")
+    
+    # PAYMENTS AND INVOICES TAB
+    with tab6:
+        manage_payments_and_invoices()
 
     # Close database connection
     cursor.close()
