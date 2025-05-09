@@ -8,6 +8,8 @@ import time as time_module
 import json
 import google.generativeai as genai
 from streamlit_chat import message
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import seaborn as sns
 from io import BytesIO
