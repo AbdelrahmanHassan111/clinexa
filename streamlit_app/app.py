@@ -1,4 +1,4 @@
-/import streamlit as st
+import streamlit as st
 import os
 import pathlib
 current_dir = pathlib.Path(__file__).parent
