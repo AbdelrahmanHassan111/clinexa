@@ -28,7 +28,9 @@ import uuid
 import base64
 import io
 from datetime import datetime, timedelta, time
-
+import os
+import pathlib
+current_dir = pathlib.Path(__file__).parent
 # Gemini API setup
 API_KEY = "AIzaSyC1R-VeIuMePDZt_Z1WLluHkoq2tjWsVz8"
 genai.configure(api_key=API_KEY)
@@ -567,7 +569,7 @@ def doctor_panel():
     with st.sidebar:
         # Add logo at the top of sidebar, centered
         st.markdown("<div style='text-align: center;'>", unsafe_allow_html=True)
-        st.image("logo.png", width=120)
+        st.image("current_dir / logo.png", width=120)
         st.markdown("</div>", unsafe_allow_html=True)
         
         st.title("Clinexa")
