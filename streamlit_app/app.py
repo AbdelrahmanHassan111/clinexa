@@ -39,7 +39,7 @@ def login():
     
     with col2:
         # Centered logo and title
-        st.image("assets/logo.png", width=250)
+        st.image("logo.png", width=250)
         st.title("Clinexa")
         st.caption("Beyond Data. Beyond Care.")
         
