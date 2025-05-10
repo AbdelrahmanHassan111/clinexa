@@ -119,7 +119,7 @@ def admin_panel():
     with st.sidebar:
         # Center logo with larger size
         st.markdown("<div style='text-align: center;'>", unsafe_allow_html=True)
-        st.image("logo.png", width=120)
+        st.image("streamlit_app/logo.png", width=120)
         st.markdown("</div>", unsafe_allow_html=True)
         
         st.title("Clinexa Admin")
