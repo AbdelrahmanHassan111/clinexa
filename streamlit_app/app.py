@@ -20,13 +20,16 @@ DB_CONFIG = {
     "password": st.secrets["connections"]["mysql"]["password"],
     "database": st.secrets["connections"]["mysql"]["database"]
 }
+
 def get_db_connection():
     """Create a direct database connection."""
     try:
+        # Establish the connection using the DB_CONFIG dictionary
         connection = mysql.connector.connect(**DB_CONFIG)
+        print("Database connection successful")
         return connection
-    except Exception as e:
-        st.error(f"Database connection error: {e}")
+    except mysql.connector.Error as err:
+        print(f"Error: {err}")
         return None
 
 def login():
@@ -36,7 +39,7 @@ def login():
     
     with col2:
         # Centered logo and title
-        st.image("streamlit_app/logo.png", width=250)
+        st.image("streamlit_app/logo.png", width=450)
         st.title("Clinexa")
         st.caption("Beyond Data. Beyond Care.")
         
