@@ -6,10 +6,11 @@ from payment_management import manage_payments_and_invoices
 
 # Database connection parameters
 DB_CONFIG = {
-    "host": "localhost",
-    "user": "root",
-    "password": "root",
-    "database": "smart_clinic"
+    "host": "sql.freedb.tech",
+        "port": 3306,
+        "user": "freedb_clinexa",
+        "password": "PJ%g2KQX&J7vW*4",
+        "database": "freedb_clinexa"
 }
 
 def get_db_connection():
