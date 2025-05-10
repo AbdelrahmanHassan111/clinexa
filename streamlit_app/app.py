@@ -20,18 +20,14 @@ DB_CONFIG = {
     "password": st.secrets["connections"]["mysql"]["password"],
     "database": st.secrets["connections"]["mysql"]["database"]
 }
-
 def get_db_connection():
     """Create a direct database connection."""
     try:
-        # Establish the connection using the DB_CONFIG dictionary
         connection = mysql.connector.connect(**DB_CONFIG)
-        print("Database connection successful")
         return connection
-    except mysql.connector.Error as err:
-        print(f"Error: {err}")
+    except Exception as e:
+        st.error(f"Database connection error: {e}")
         return None
-
 def login():
     """Handles user authentication with trimmed inputs."""
     # Create a three-column layout with the middle column for login
