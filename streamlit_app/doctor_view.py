@@ -570,7 +570,7 @@ def doctor_panel():
     with st.sidebar:
         # Add logo at the top of sidebar, centered
         st.markdown("<div style='text-align: center;'>", unsafe_allow_html=True)
-        st.image("https://github.com/AbdelrahmanHassan111/clinexa/blob/main/streamlit_app/logo.png", width=120)
+        st.image("streamlit_app/logo.png", width=120)
         st.markdown("</div>", unsafe_allow_html=True)
         
         st.title("Clinexa")
