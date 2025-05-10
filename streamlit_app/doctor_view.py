@@ -58,10 +58,11 @@ except Exception as e:
 
 # Database connection parameters
 DB_CONFIG = {
-    "host": "localhost",
-    "user": "root", 
-    "password": "root",
-    "database": "smart_clinic"
+   "host": st.secrets["connections"]["mysql"]["host"],
+    "port": st.secrets["connections"]["mysql"]["port"],
+    "user": st.secrets["connections"]["mysql"]["username"],
+    "password": st.secrets["connections"]["mysql"]["password"],
+    "database": st.secrets["connections"]["mysql"]["database"]
 }
 
 # Class mapping for Alzheimer's predictions
