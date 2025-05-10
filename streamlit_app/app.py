@@ -16,11 +16,11 @@ try:
 except ImportError:
     # Fallback configuration if db_config.py is not available
     DB_CONFIG = {
-        "host": "localhost",
+        "host": "sql.freedb.tech",
         "port": 3306,
-        "user": "root",
-        "password": "root",
-        "database": "smart_clinic"
+        "user": "freedb_clinexa",
+        "password": "PJ%g2KQX&J7vW*4",
+        "database": "freedb_clinexa"
     }
 
 def get_db_connection():
