@@ -39,7 +39,7 @@ def login():
     
     with col2:
         # Centered logo and title
-        st.image("https://github.com/AbdelrahmanHassan111/clinexa/blob/main/streamlit_app/logo.png", width=250)
+        st.image("streamlit_app/logo.png", width=250)
         st.title("Clinexa")
         st.caption("Beyond Data. Beyond Care.")
         
