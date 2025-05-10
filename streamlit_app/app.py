@@ -11,11 +11,9 @@ from doctor_view import doctor_panel
 from patient_portal import patient_portal
 
 # Database connection parameters
-try:
-    from db_config import DB_CONFIG
-except ImportError:
+
     # Fallback configuration if db_config.py is not available
-    DB_CONFIG = {
+DB_CONFIG = {
     "host": st.secrets["connections"]["mysql"]["host"],
     "port": st.secrets["connections"]["mysql"]["port"],
     "user": st.secrets["connections"]["mysql"]["username"],
