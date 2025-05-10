@@ -37,7 +37,7 @@ genai.configure(api_key=API_KEY)
 model = genai.GenerativeModel("gemini-2.5-pro-exp-03-25")
 
 # Load the ML model - use relative path
-model_path = "model\\XGBoost_grid_optimized.joblib"
+model_path = "model/XGBoost_grid_optimized.joblib"
 try:
     # Check if model file exists
     if os.path.exists(model_path):
