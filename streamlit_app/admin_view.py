@@ -6,11 +6,11 @@ from payment_management import manage_payments_and_invoices
 
 # Database connection parameters
 DB_CONFIG = {
-    "host": st.secrets["connections"]["mysql"]["host"],
-    "port": st.secrets["connections"]["mysql"]["port"],
-    "user": st.secrets["connections"]["mysql"]["username"],
-    "password": st.secrets["connections"]["mysql"]["password"],
-    "database": st.secrets["connections"]["mysql"]["database"]
+   "host": st.secrets["connections.mysql"]["host"],
+    "port": st.secrets[connections.mysql]["port"],
+    "user": st.secrets[connections.mysql]["username"],
+    "password": st.secrets[connections.mysql]["password"],
+    "database": st.secrets[connections.mysql]["database"]
 }
 
 def get_db_connection():
