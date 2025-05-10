@@ -16,11 +16,11 @@ try:
 except ImportError:
     # Fallback configuration if db_config.py is not available
     DB_CONFIG = {
-        "host": st.secrets["host"],
-    "port": st.secrets["port"],
-    "user": st.secrets["username"],
-    "password": st.secrets["password"],
-    "database": st.secrets["database"]
+        "host": st.secrets.host,
+    "port": st.secrets.port,
+    "user": st.secrets.username,
+    "password": st.secrets.password,
+    "database": st.secrets.database
     }
 
 def get_db_connection():
