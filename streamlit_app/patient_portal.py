@@ -17,10 +17,11 @@ try:
 except ImportError:
     # Fallback configuration if db_config.py is not available
     DB_CONFIG = {
-        "host": "localhost",
-        "user": "root",
-        "password": "root",
-        "database": "smart_clinic"
+        "host": "sql.freedb.tech",
+        "port": 3306,
+        "user": "freedb_clinexa",
+        "password": "PJ%g2KQX&J7vW*4",
+        "database": "freedb_clinexa"
     }
 
 # Add custom CSS for better UI
