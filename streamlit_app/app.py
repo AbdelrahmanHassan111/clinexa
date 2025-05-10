@@ -15,7 +15,7 @@ from patient_portal import patient_portal
     # Fallback configuration if db_config.py is not available
 DB_CONFIG = {
     "host": st.secrets["connections"]["mysql"]["host"],
-    "port": st.secrets["connections"]["mysql"][port],
+    "port": 3306,
     "user": st.secrets["connections"]["mysql"]["username"],
     "password": st.secrets["connections"]["mysql"]["password"],
     "database": st.secrets["connections"]["mysql"]["database"]
