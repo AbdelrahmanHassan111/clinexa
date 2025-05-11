@@ -1,4 +1,7 @@
 import streamlit as st
+import os
+import pathlib
+current_dir = pathlib.Path(__file__).parent
 # Set page config must be the first streamlit command
 st.set_page_config(page_title="Alzheimer Diagnosis System", layout="wide")
 
@@ -7,19 +10,20 @@ from admin_view import admin_panel
 from doctor_view import doctor_panel
 from patient_portal import patient_portal
 
-# Database connection parameters
-try:
-    from db_config import DB_CONFIG
-except ImportError:
-    # Fallback configuration if db_config.py is not available
-    DB_CONFIG = {
-        "host": "localhost",
-        "port": 3306,
-        "user": "root",
-        "password": "root",
-        "database": "smart_clinic"
-    }
+from mysql.connector import Error
+import streamlit as st
+import time
 
+# Database connection parameters
+
+    # Fallback configuration if db_config.py is not available
+DB_CONFIG = {
+    "host": st.secrets["host"],
+    "port": st.secrets["port"],
+    "user": st.secrets["username"],
+    "password": st.secrets["password"],
+    "database": st.secrets["database"]
+}
 def get_db_connection():
     """Create a direct database connection."""
     try:
@@ -28,7 +32,6 @@ def get_db_connection():
     except Exception as e:
         st.error(f"Database connection error: {e}")
         return None
-
 def login():
     """Handles user authentication with trimmed inputs."""
     # Create a three-column layout with the middle column for login
@@ -36,7 +39,7 @@ def login():
     
     with col2:
         # Centered logo and title
-        st.image("logo.png", width=250)
+        st.image("streamlit_app/logo.png", width=450)
         st.title("Clinexa")
         st.caption("Beyond Data. Beyond Care.")
         

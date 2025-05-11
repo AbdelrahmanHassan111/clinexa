@@ -6,10 +6,11 @@ from payment_management import manage_payments_and_invoices
 
 # Database connection parameters
 DB_CONFIG = {
-    "host": "localhost",
-    "user": "root",
-    "password": "root",
-    "database": "smart_clinic"
+    "host": st.secrets["host"],
+    "port": st.secrets["port"],
+    "user": st.secrets["username"],
+    "password": st.secrets["password"],
+    "database": st.secrets["database"]
 }
 
 def get_db_connection():
@@ -118,7 +119,7 @@ def admin_panel():
     with st.sidebar:
         # Center logo with larger size
         st.markdown("<div style='text-align: center;'>", unsafe_allow_html=True)
-        st.image("logo.png", width=120)
+        st.image("streamlit_app/logo.png", width=120)
         st.markdown("</div>", unsafe_allow_html=True)
         
         st.title("Clinexa Admin")

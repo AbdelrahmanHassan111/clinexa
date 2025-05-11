@@ -5,10 +5,11 @@ from pathlib import Path
 
 # Default database configuration
 DEFAULT_DB_CONFIG = {
-    "host": "localhost",
-    "user": "root",
-    "password": "root",
-    "database": "smart_clinic"
+    "host": st.secrets["host"],
+    "port": st.secrets["port"],
+    "user": st.secrets["username"],
+    "password": st.secrets["password"],
+    "database": st.secrets["database"]
 }
 
 def get_db_config():
@@ -22,10 +23,11 @@ def get_db_config():
     # 1. Check Streamlit secrets (for Streamlit Cloud deployment)
     if hasattr(st, "secrets") and "mysql" in st.secrets:
         return {
-            "host": st.secrets.mysql.host,
-            "user": st.secrets.mysql.user,
-            "password": st.secrets.mysql.password,
-            "database": st.secrets.mysql.database
+            "host": st.secrets["connections"]["mysql"]["host"],
+    "port": st.secrets["connections"]["mysql"]["port"],
+    "user": st.secrets["connections"]["mysql"]["username"],
+    "password": st.secrets["connections"]["mysql"]["password"],
+    "database": st.secrets["connections"]["mysql"]["database"]
         }
     
     # 2. Check environment variables (for containerized deployment)
