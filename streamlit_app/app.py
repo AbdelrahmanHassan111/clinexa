@@ -18,11 +18,11 @@ import time
 
     # Fallback configuration if db_config.py is not available
 DB_CONFIG = {
-     "host": "clinexa.cgpek8igovya.us-east-1.rds.amazonaws.com",
-    "port": 3306,
-    "user": "clinexa",
-    "password": "Am24268934",
-    "database": "clinexa_db"
+    "host": st.secrets["host"],
+    "port": st.secrets["port"],
+    "user": st.secrets["username"],
+    "password": st.secrets["password"],
+    "database": st.secrets["database"]
 }
 def get_db_connection():
     """Create a direct database connection."""
