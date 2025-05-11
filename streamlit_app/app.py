@@ -10,24 +10,65 @@ from admin_view import admin_panel
 from doctor_view import doctor_panel
 from patient_portal import patient_portal
 
-# Database connection parameters
+from mysql.connector import Error
+import streamlit as st
+import time
 
-    # Fallback configuration if db_config.py is not available
+# Database connection parameters
 DB_CONFIG = {
-     "host": "sql.freedb.tech",
+    "host": "sql.freedb.tech",
     "port": 3306,
     "user": "freedb_clinexa",
     "password": "PJ%g2KQX&J7vW*4",
-    "database": "freedb_clinexa"
+    "database": "freedb_clinexa",
+    "connection_timeout": 10,  # Add timeout to avoid hanging
+    "use_pure": True,  # Use pure Python implementation for better compatibility
+    "autocommit": True,  # Autocommit mode
+    "pool_size": 3,  # Small pool for FreedB's limited connections
+    "pool_name": "streamlit_pool"
 }
-def get_db_connection():
-    """Create a direct database connection."""
+
+# Create a connection pool that can be reused across Streamlit reruns
+@st.cache_resource
+def create_connection_pool():
+    """Create a connection pool that persists across Streamlit reruns."""
     try:
-        connection = mysql.connector.connect(**DB_CONFIG)
-        return connection
-    except Exception as e:
-        st.error(f"Database connection error: {e}")
+        pool = mysql.connector.pooling.MySQLConnectionPool(**DB_CONFIG)
+        return pool
+    except Error as e:
+        st.error(f"Failed to create connection pool: {e}")
         return None
+
+def get_db_connection():
+    """Get a connection from the pool with retry logic."""
+    pool = create_connection_pool()
+    if not pool:
+        return None
+    
+    max_retries = 3
+    retry_delay = 2  # seconds
+    
+    for attempt in range(max_retries):
+        try:
+            connection = pool.get_connection()
+            if connection.is_connected():
+                return connection
+            else:
+                connection.close()
+                st.warning(f"Connection appears closed, retrying ({attempt+1}/{max_retries})...")
+        except Error as e:
+            # Check if it's a connection limit error
+            if "too many connections" in str(e).lower() or "connection refused" in str(e).lower():
+                if attempt < max_retries - 1:
+                    st.warning(f"Connection limit reached, retrying in {retry_delay} seconds... ({attempt+1}/{max_retries})")
+                    time.sleep(retry_delay)
+                    retry_delay *= 2  # Exponential backoff
+                else:
+                    st.error(f"Failed to connect after {max_retries} attempts: {e}")
+            else:
+                st.error(f"Database connection error: {e}")
+            
+    return None
 def login():
     """Handles user authentication with trimmed inputs."""
     # Create a three-column layout with the middle column for login
