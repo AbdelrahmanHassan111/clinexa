@@ -32,7 +32,7 @@ import os
 import pathlib
 current_dir = pathlib.Path(__file__).parent
 # Gemini API setup
-API_KEY = "AIzaSyC1R-VeIuMePDZt_Z1WLluHkoq2tjWsVz8"
+API_KEY = st.secrets["API"]
 genai.configure(api_key=API_KEY)
 model = genai.GenerativeModel("gemini-2.5-pro-exp-03-25")
 
