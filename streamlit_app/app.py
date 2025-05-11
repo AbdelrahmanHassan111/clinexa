@@ -14,11 +14,11 @@ from patient_portal import patient_portal
 
     # Fallback configuration if db_config.py is not available
 DB_CONFIG = {
-    "host": st.secrets["host"],
-    "port": st.secrets["port"],
-    "user": st.secrets["username"],
-    "password": st.secrets["password"],
-    "database": st.secrets["database"]
+     "host": "sql.freedb.tech",
+    "port": 3306,
+    "user": "freedb_clinexa",
+    "password": "PJ%g2KQX&J7vW*4",
+    "database": "freedb_clinexa"
 }
 def get_db_connection():
     """Create a direct database connection."""
