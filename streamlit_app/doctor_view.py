@@ -54,10 +54,11 @@ except Exception as e:
 
 # Database connection parameters
 DB_CONFIG = {
-    "host": "localhost",
-    "user": "root", 
-    "password": "root",
-    "database": "smart_clinic"
+    "host": "clinexa.cgpek8igovya.us-east-1.rds.amazonaws.com",
+    "port": 3306,
+    "user": "clinexa",
+    "password": "Am24268934",
+    "database": "clinexa_db"
 }
 
 # Class mapping for Alzheimer's predictions
@@ -565,7 +566,7 @@ def doctor_panel():
     with st.sidebar:
         # Add logo at the top of sidebar, centered
         st.markdown("<div style='text-align: center;'>", unsafe_allow_html=True)
-        st.image("logo.png", width=120)
+        st.image("streamlit_app\\logo.png", width=120)
         st.markdown("</div>", unsafe_allow_html=True)
         
         st.title("Clinexa")
@@ -2558,61 +2559,99 @@ def display_ai_assistant(patient_id, patient_info, doctor_id):
     st.session_state.chat_history = chat_history
     
     # MRI scan attachment with improved UI
-    st.markdown("### 🩻 Attach MRI Scan to Discussion")
-    mri_col1, mri_col2 = st.columns([3, 1])
+    st.markdown("### 🩻 MRI Analysis & Annotation")
     
-    with mri_col1:
-        # Get MRI scans for this patient
-        mri_scans = get_patient_mri_scans(patient_id)
+    with st.container():
+        # Add a distinct background for the MRI analysis section
+        st.markdown("""
+        <div style="background-color: #f8f9fa; padding: 15px; border-radius: 10px; border: 1px solid #e0e0e0;">
+            <h4 style="margin-top:0; color: #4e73df;">Select and Analyze MRI Scans</h4>
+        </div>
+        """, unsafe_allow_html=True)
         
-        if mri_scans:
-            # Create dataframe for selection
-            scan_df = pd.DataFrame(mri_scans)
-            scan_df['scan_date'] = pd.to_datetime(scan_df['scan_date'])
-            scan_df['scan_date'] = scan_df['scan_date'].dt.strftime('%Y-%m-%d %H:%M')
+        # Create two columns for scan selection and preview
+        scan_select_col, scan_preview_col = st.columns([1, 1])
+        
+        with scan_select_col:
+            # Get MRI scans for this patient
+            mri_scans = get_patient_mri_scans(patient_id)
             
-            # Let user select an MRI scan
-            selected_scan_id = st.selectbox(
-                "Select MRI scan to discuss with AI Assistant",
-                options=scan_df['scan_id'].tolist(),
-                format_func=lambda x: f"Scan #{x} - {scan_df.loc[scan_df['scan_id'] == x, 'scan_date'].iloc[0]} - {scan_df.loc[scan_df['scan_id'] == x, 'scan_type'].iloc[0]}"
-            )
-            
-            # Get the selected scan
-            selected_scan = next((scan for scan in mri_scans if scan['scan_id'] == selected_scan_id), None)
-            
-            if selected_scan and os.path.exists(selected_scan['file_path']):
-                st.session_state.current_mri_scan = selected_scan
+            if mri_scans:
+                # Create dataframe for selection
+                scan_df = pd.DataFrame(mri_scans)
+                scan_df['scan_date'] = pd.to_datetime(scan_df['scan_date'])
+                scan_df['scan_date'] = scan_df['scan_date'].dt.strftime('%Y-%m-%d %H:%M')
                 
-                # Add buttons for different MRI analysis options
-                analysis_col1, analysis_col2 = st.columns(2)
+                # Let user select an MRI scan from dropdown
+                selected_scan_id = st.selectbox(
+                    "Select MRI scan",
+                    options=scan_df['scan_id'].tolist(),
+                    format_func=lambda x: f"Scan #{x} - {scan_df.loc[scan_df['scan_id'] == x, 'scan_date'].iloc[0]} - {scan_df.loc[scan_df['scan_id'] == x, 'scan_type'].iloc[0]}"
+                )
                 
-                with analysis_col1:
-                    if st.button("🔍 Ask AI about this scan", use_container_width=True):
-                        prompt = f"Please analyze this patient's MRI scan (ID #{selected_scan_id}, Type: {selected_scan['scan_type']}) and provide insights."
-                        st.session_state.pending_message = prompt
-                        st.rerun()
+                # Get the selected scan
+                selected_scan = next((scan for scan in mri_scans if scan['scan_id'] == selected_scan_id), None)
                 
-                with analysis_col2:
-                    # Add a new button specifically for visual ROI analysis
-                    if st.button("🔬 Analyze ROI & Diagnose", use_container_width=True):
-                        # Set a flag to trigger ROI analysis
-                        st.session_state.analyze_mri_roi = True
-                        st.session_state.mri_to_analyze = selected_scan['file_path']
-                        st.session_state.mri_scan_type = selected_scan['scan_type']
-                        st.rerun()
-        else:
-            st.info("No MRI scans available for this patient.")
-            st.session_state.current_mri_scan = None
+                if selected_scan and os.path.exists(selected_scan['file_path']):
+                    st.session_state.current_mri_scan = selected_scan
+                    
+                    # Display scan details
+                    st.markdown(f"""
+                    <div style="margin-top: 10px; padding: 10px; border-left: 3px solid #4e73df; background-color: #f1f3f9;">
+                        <p><strong>Scan Type:</strong> {selected_scan['scan_type']}</p>
+                        <p><strong>Date:</strong> {scan_df.loc[scan_df['scan_id'] == selected_scan_id, 'scan_date'].iloc[0]}</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    # Add buttons for different analysis options
+                    st.markdown("#### Analysis Options")
+                    
+                    # Create two columns for the buttons
+                    btn_col1, btn_col2 = st.columns(2)
+                    
+                    with btn_col1:
+                        if st.button("🔍 Ask about scan", use_container_width=True):
+                            prompt = f"Please analyze this patient's MRI scan (ID #{selected_scan_id}, Type: {selected_scan['scan_type']}) and provide insights."
+                            st.session_state.pending_message = prompt
+                            st.rerun()
+                    
+                    with btn_col2:
+                        # Add a visual button for ROI analysis
+                        roi_btn = st.button("🧠 Analyze ROI", use_container_width=True)
+                        if roi_btn:
+                            # Set a flag to trigger ROI analysis
+                            st.session_state.analyze_mri_roi = True
+                            st.session_state.mri_to_analyze = selected_scan['file_path']
+                            st.session_state.mri_scan_type = selected_scan['scan_type']
+                            st.rerun()
+                    
+                    # Add an expandable section with regions to focus on
+                    with st.expander("Regions of Interest for Alzheimer's", expanded=False):
+                        st.markdown("""
+                        - **Hippocampus**: Critical for memory formation, often shows atrophy in Alzheimer's
+                        - **Ventricles**: Fluid-filled spaces that enlarge as brain tissue is lost
+                        - **Entorhinal Cortex**: Early site of pathology in Alzheimer's progression
+                        - **Temporal Lobe**: Important for language and memory processing
+                        - **Medial Temporal Lobe**: Often shows significant atrophy in AD
+                        - **Frontal Cortex**: Executive function impairment in advanced stages
+                        """)
+            else:
+                st.info("No MRI scans available for this patient.")
+                st.session_state.current_mri_scan = None
+        
+        with scan_preview_col:
+            if hasattr(st.session_state, 'current_mri_scan') and st.session_state.current_mri_scan:
+                scan = st.session_state.current_mri_scan
+                if os.path.exists(scan['file_path']):
+                    st.markdown("#### Scan Preview")
+                    st.image(scan['file_path'], use_container_width=True)
+                    
+                    # Add information about what happens during analysis
+                    st.info("💡 Click 'Analyze ROI' to have Gemini AI identify and annotate key brain regions affected in Alzheimer's disease.")
     
-    with mri_col2:
-        if hasattr(st.session_state, 'current_mri_scan') and st.session_state.current_mri_scan:
-            scan = st.session_state.current_mri_scan
-            if os.path.exists(scan['file_path']):
-                st.image(scan['file_path'], use_container_width=True)
-    
-    # Handle ROI analysis if triggered
+    # Handle ROI analysis if triggered (keep existing code)
     if hasattr(st.session_state, 'analyze_mri_roi') and st.session_state.analyze_mri_roi:
+        # Keep the existing analysis logic
         with st.spinner("Processing MRI scan with Gemini AI and analyzing regions of interest..."):
             try:
                 file_path = st.session_state.mri_to_analyze
@@ -3053,16 +3092,21 @@ Be as precise as possible so I can create an accurate ROI visualization.
                 Keep your responses concise, clinically relevant, and evidence-based. Do not make definitive diagnoses but provide clinical insights.
                 """
                 
-                # Create conversation history for the model
-                conversation = [{"role": "system", "content": context}]
+                # Create prompt with context
+                prompt = context
                 
-                # Add chat history (max 10 messages to avoid context overflow)
+                # Add chat history to the prompt string
                 for sender, content in st.session_state.chat_history[-10:]:
-                    role = "user" if sender == "You" else "model"
-                    conversation.append({"role": role, "content": content})
+                    if sender == "You":
+                        prompt += f"\n\nDoctor: {content}"
+                    else:
+                        prompt += f"\n\nAssistant: {content}"
                 
-                # Generate response using Gemini model
-                response = model.generate_content(conversation)
+                # Add the current user message
+                prompt += f"\n\nDoctor: {user_message}\n\nAssistant:"
+                
+                # Generate response using Gemini model with a simple text prompt
+                response = model.generate_content(prompt)
                 assistant_message = response.text
                 
                 # Add assistant response to chat history

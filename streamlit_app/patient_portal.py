@@ -323,8 +323,18 @@ def get_doctor_schedule(doctor_id, start_date, end_date):
         conn.close()
         return []
 
-def generate_available_slots(doctor_id, selected_date):
-    """Generate available time slots for the selected date"""
+def generate_available_slots(doctor_id, selected_date, patient_id=None):
+    """
+    Generate available time slots for the selected date
+    
+    Args:
+        doctor_id: The ID of the doctor
+        selected_date: The date to check for availability
+        patient_id: The patient ID to check for existing appointments across all doctors
+        
+    Returns:
+        List of available datetime slots
+    """
     # Define clinic hours (9 AM to 5 PM with 30-minute slots)
     start_hour = 9
     end_hour = 17
@@ -335,19 +345,50 @@ def generate_available_slots(doctor_id, selected_date):
     end_datetime = datetime.combine(selected_date, time(23, 59))
     scheduled_times = get_doctor_schedule(doctor_id, start_datetime, end_datetime)
     
+    # Get patient's existing appointments for the day (with any doctor)
+    patient_scheduled_times = []
+    if patient_id:
+        conn = get_db_connection()
+        if conn:
+            cursor = conn.cursor(dictionary=True)
+            try:
+                cursor.execute("""
+                    SELECT appointment_date
+                    FROM appointments
+                    WHERE patient_id = %s 
+                    AND DATE(appointment_date) = %s
+                    AND status IN ('Scheduled', 'Confirmed', 'Rescheduled')
+                """, (patient_id, selected_date))
+                
+                patient_appointments = cursor.fetchall()
+                patient_scheduled_times = [appt['appointment_date'] for appt in patient_appointments]
+            except Exception as e:
+                print(f"Error fetching patient appointments: {e}")
+            finally:
+                cursor.close()
+                conn.close()
+    
     # Generate all possible slots
     available_slots = []
     current_time = datetime.combine(selected_date, time(start_hour, 0))
     end_time = datetime.combine(selected_date, time(end_hour, 0))
     
     while current_time < end_time:
-        # Check if this slot is already booked
+        # Check if this slot is already booked with the doctor
         is_available = True
         for scheduled in scheduled_times:
             time_diff = abs((current_time - scheduled).total_seconds()) / 60
             if time_diff < slot_duration:  # Slot overlaps with existing appointment
                 is_available = False
                 break
+        
+        # Check if patient already has an appointment at this time with any doctor
+        if is_available and patient_id:
+            for patient_scheduled in patient_scheduled_times:
+                time_diff = abs((current_time - patient_scheduled).total_seconds()) / 60
+                if time_diff < slot_duration:  # Slot overlaps with patient's existing appointment
+                    is_available = False
+                    break
         
         if is_available:
             available_slots.append(current_time)
@@ -402,19 +443,26 @@ def schedule_appointment(patient_id):
         col1, col2 = st.columns(2)
         
         with col1:
-            # Select doctor with specialized UI
+            # Select doctor with dropdown interface for single selection
             st.subheader("Select Doctor")
             doctor_options = {f"{doc['full_name']} ({doc['specialization']})": doc['doctor_id'] for doc in doctors}
-            doctor_list = list(doctor_options.keys())
             
-            # Create visual selection for doctors
-            selected_doctor_index = 0  # Default selection
-            for i, doctor in enumerate(doctor_list):
-                if st.checkbox(f"👨‍⚕️ {doctor}", key=f"dr_{i}", value=(i==selected_doctor_index)):
-                    selected_doctor_index = i
+            # Add a prompt option that can't be selected
+            doctor_options = {"Select a doctor": ""} | doctor_options
             
-            selected_doctor_display = doctor_list[selected_doctor_index]
+            # Use selectbox for doctor selection
+            selected_doctor_display = st.selectbox(
+                "Choose your preferred doctor",
+                options=list(doctor_options.keys()),
+                index=0,
+                key="doctor_select"
+            )
+            
             selected_doctor_id = doctor_options[selected_doctor_display]
+            
+            # Show warning if no doctor is selected
+            if not selected_doctor_id:
+                st.warning("Please select a doctor to continue")
         
         with col2:
             # Select date
@@ -438,26 +486,33 @@ def schedule_appointment(patient_id):
         additional_notes = st.text_area("Additional Notes or Questions (Optional)", 
                                        placeholder="Any specific questions or concerns you'd like to discuss")
         
-        # Submit button without key parameter
+        # Submit button
         submit = st.form_submit_button("Check Available Times")
         
         if submit:
+            if not selected_doctor_id:
+                st.error("Please select a doctor")
+                return
+                
             if not visit_reason:
                 st.error("Please provide a reason for your visit")
                 return
             
             # Generate available time slots
-            available_slots = generate_available_slots(selected_doctor_id, selected_date)
+            available_slots = generate_available_slots(selected_doctor_id, selected_date, patient_id)
             
             if not available_slots:
                 st.warning("No available appointment slots for the selected date. Please try another date.")
                 return
             
+            # Get the doctor name without the specialty part
+            doctor_name = selected_doctor_display.split(" (")[0] if "(" in selected_doctor_display else selected_doctor_display
+            
             # Store form data in session state for the next step
             st.session_state.appointment_form_data = {
                 'patient_id': patient_id,
                 'doctor_id': selected_doctor_id,
-                'doctor_name': selected_doctor_display.split(' (')[0],  # Extract just the name
+                'doctor_name': doctor_name,
                 'selected_date': selected_date,
                 'visit_reason': visit_reason,
                 'additional_notes': additional_notes,
@@ -508,8 +563,6 @@ def schedule_appointment(patient_id):
                 <h4>Appointment Details</h4>
                 <p><strong>Doctor:</strong> {data['doctor_name']}</p>
                 <p><strong>Date:</strong> {data['selected_date'].strftime('%A, %B %d, %Y')}</p>
-                <p><strong>Time:</strong> {selected_time_str}</p>
-                <p><strong>Reason:</strong> {data['visit_reason']}</p>
             </div>
             """, unsafe_allow_html=True)
             
@@ -520,8 +573,36 @@ def schedule_appointment(patient_id):
                     st.error("Database connection failed")
                     return
                 
-                cursor = conn.cursor()
+                cursor = conn.cursor(dictionary=True)
                 try:
+                    # First check again if the patient already has an appointment at the same time
+                    # with any doctor to prevent race conditions
+                    slot_start = selected_datetime
+                    slot_end = slot_start + timedelta(minutes=30)
+                    
+                    cursor.execute("""
+                        SELECT a.appointment_id, a.appointment_date, d.full_name as doctor_name
+                        FROM appointments a
+                        JOIN doctors d ON a.doctor_id = d.doctor_id
+                        WHERE a.patient_id = %s 
+                        AND a.status IN ('Scheduled', 'Confirmed', 'Rescheduled')
+                        AND a.appointment_date BETWEEN %s AND %s
+                    """, (data['patient_id'], slot_start - timedelta(minutes=29), slot_end))
+                    
+                    existing_appointments = cursor.fetchall()
+                    
+                    if existing_appointments:
+                        # Patient already has an appointment at this time with another doctor
+                        existing_appt = existing_appointments[0]
+                        existing_time = existing_appt['appointment_date'].strftime('%I:%M %p')
+                        existing_doctor = existing_appt['doctor_name']
+                        
+                        st.error(f"""
+                        You already have an appointment with Dr. {existing_doctor} at {existing_time}.
+                        Please select a different time or cancel your existing appointment first.
+                        """)
+                        return
+                    
                     # Combine reason and notes
                     notes = data['visit_reason']
                     if data['additional_notes']:
@@ -588,23 +669,29 @@ def schedule_appointment(patient_id):
 
 def view_appointments(patient_id):
     """View and manage existing appointments with improved UI"""
-    st.header("🗓️ My Appointments")
+    st.header("📅 My Appointments")
     
-    conn = get_db_connection()
-    if not conn:
-        st.error("Database connection failed")
-        return
-    
-    cursor = conn.cursor(dictionary=True)
     try:
-        # Get all appointments for the patient
+        # Check if in reschedule mode
+        if 'reschedule_mode' in st.session_state and st.session_state.reschedule_mode:
+            reschedule_appointment_ui(patient_id, st.session_state.appointment_to_reschedule)
+            return
+        
+        # Get appointments
+        conn = get_db_connection()
+        if not conn:
+            st.error("Database connection failed")
+            return
+        
+        cursor = conn.cursor(dictionary=True)
         cursor.execute("""
-            SELECT a.appointment_id, a.appointment_date, a.reason, a.status,
+            SELECT a.appointment_id, a.appointment_date,
+                   a.status, a.reason,
                    d.full_name as doctor_name, d.specialization
             FROM appointments a
             JOIN doctors d ON a.doctor_id = d.doctor_id
             WHERE a.patient_id = %s
-            ORDER BY a.appointment_date DESC
+            ORDER BY a.appointment_date
         """, (patient_id,))
         
         appointments = cursor.fetchall()
@@ -612,77 +699,78 @@ def view_appointments(patient_id):
         conn.close()
         
         if not appointments:
-            st.info("You have no appointments scheduled. Use the Schedule Appointment tab to book a new appointment.")
+            st.info("You don't have any appointments scheduled yet.")
             
-            # Show some informational content
-            st.markdown("""
-            <div style="background-color: #f0f9ff; padding: 20px; border-radius: 10px; border-left: 5px solid #3b82f6; margin-top: 20px;">
-                <h3>Why Regular Check-ups Matter</h3>
-                <p>Regular appointments with your healthcare providers help:</p>
-                <ul>
-                    <li>Monitor your overall health and cognitive function</li>
-                    <li>Detect potential issues early when they're easier to treat</li>
-                    <li>Adjust your treatment plan as needed</li>
-                    <li>Answer any questions or concerns you may have</li>
-                </ul>
-                <p>We recommend scheduling check-ups at least every 6 months.</p>
-            </div>
-            """, unsafe_allow_html=True)
+            # Add a button to schedule a new appointment
+            if st.button("➕ Schedule an Appointment", key="no_appts_schedule_btn"):
+                st.session_state.patient_portal_page = "schedule"
+                st.rerun()
             return
         
-        # Separate upcoming and past appointments
-        now = datetime.now()
-        upcoming_appointments = [a for a in appointments if a['appointment_date'] > now]
-        past_appointments = [a for a in appointments if a['appointment_date'] <= now]
+        # Filter by upcoming/past
+        today = datetime.now()
+        upcoming_appointments = []
+        past_appointments = []
+        
+        for appt in appointments:
+            # Use appointment_date directly since it contains both date and time
+            appt_datetime = appt['appointment_date']
+            
+            # Add formatted date/time for display
+            appt['appt_date'] = appt_datetime.strftime('%B %d, %Y')
+            appt['appt_time'] = appt_datetime.strftime('%I:%M %p')
+            
+            # Categorize as upcoming or past
+            if appt_datetime > today and appt['status'] != 'Cancelled':
+                upcoming_appointments.append(appt)
+            else:
+                past_appointments.append(appt)
         
         # Display upcoming appointments
+        st.subheader("Upcoming Appointments")
+        
         if upcoming_appointments:
-            st.subheader("Upcoming Appointments")
-            
-            # Create a card for each upcoming appointment
-            for i, appt in enumerate(upcoming_appointments):
-                # Format the appointment date and time
-                appt_date = appt['appointment_date'].strftime('%A, %B %d, %Y')
-                appt_time = appt['appointment_date'].strftime('%I:%M %p')
+            for appt in upcoming_appointments:
+                # Determine status color
+                if appt['status'] == 'Confirmed' or appt['status'] == 'Scheduled':
+                    status_color = "#10B981"  # green
+                elif appt['status'] == 'Rescheduled':
+                    status_color = "#3B82F6"  # blue
+                else:
+                    status_color = "#6B7280"  # gray
                 
-                # Set status badge color
-                status_color = "#10B981"  # green
-                if appt['status'] == "Cancelled":
-                    status_color = "#EF4444"  # red
-                elif appt['status'] == "Rescheduled":
-                    status_color = "#F59E0B"  # orange
-                
-                with st.container():
-                    st.markdown(f"""
-                    <div style="background-color: white; padding: 20px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); margin-bottom: 15px;">
-                        <div style="display: flex; justify-content: space-between; align-items: center;">
-                            <div>
-                                <h3 style="margin: 0; color: #1e3a8a;">📅 {appt_date}</h3>
-                                <p style="margin: 5px 0;">⏰ {appt_time}</p>
-                            </div>
-                            <div>
-                                <span style="background-color: {status_color}; color: white; padding: 5px 10px; border-radius: 20px; font-size: 12px;">{appt['status']}</span>
-                            </div>
+                st.markdown(f"""
+                <div style="background-color: white; padding: 15px; border-radius: 10px; box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1); margin-bottom: 15px;">
+                    <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+                        <div>
+                            <h3 style="margin: 0; color: #1e3a8a;">📅 {appt['appt_date']}</h3>
+                            <p style="margin: 5px 0;">⏰ {appt['appt_time']}</p>
                         </div>
-                        <hr style="margin: 10px 0; border: none; border-top: 1px solid #e5e7eb;">
-                        <p><strong>Doctor:</strong> {appt['doctor_name']} ({appt['specialization']})</p>
-                        <p><strong>Reason:</strong> {appt['reason']}</p>
+                        <div>
+                            <span style="background-color: {status_color}; color: white; padding: 5px 10px; border-radius: 20px; font-size: 12px;">{appt['status']}</span>
+                        </div>
                     </div>
-                    """, unsafe_allow_html=True)
-                    
-                    # Actions for this appointment (if scheduled)
-                    if appt['status'] == "Scheduled":
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            if st.button("✏️ Reschedule", key=f"reschedule_appt_{appt['appointment_id']}", help="Reschedule this appointment"):
-                                # Add reschedule functionality - for now just placeholder
-                                st.info("Reschedule functionality will be available soon")
-                        with col2:
-                            if st.button("❌ Cancel", key=f"cancel_appt_{appt['appointment_id']}", help="Cancel this appointment"):
-                                cancel_result = cancel_appointment(appt['appointment_id'])
-                                if cancel_result:
-                                    st.success("Appointment cancelled successfully")
-                                    st.rerun()
+                    <hr style="margin: 10px 0; border: none; border-top: 1px solid #e5e7eb;">
+                    <p><strong>Doctor:</strong> {appt['doctor_name']} ({appt['specialization']})</p>
+                    <p><strong>Reason:</strong> {appt['reason']}</p>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                # Actions for this appointment (if scheduled)
+                if appt['status'] in ['Scheduled', 'Confirmed', 'Rescheduled']:
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.button("✏️ Reschedule", key=f"reschedule_appt_{appt['appointment_id']}", help="Reschedule this appointment"):
+                            # Set up reschedule mode and store appointment info
+                            st.session_state.reschedule_mode = True
+                            st.session_state.appointment_to_reschedule = appt
+                            st.rerun()
+                    with col2:
+                        if st.button("❌ Cancel", key=f"cancel_appt_{appt['appointment_id']}", help="Cancel this appointment"):
+                            cancel_result = cancel_appointment(appt['appointment_id'])
+                            if cancel_result:
+                                st.success("Appointment cancelled successfully")
+                                st.rerun()
         else:
             st.info("You have no upcoming appointments.")
             
@@ -724,6 +812,273 @@ def cancel_appointment(appointment_id):
     
     except Exception as e:
         st.error(f"Error cancelling appointment: {e}")
+        cursor.close()
+        conn.close()
+        return False
+
+def reschedule_appointment_ui(patient_id, appointment):
+    """UI for rescheduling an appointment."""
+    st.header("✏️ Reschedule Appointment")
+    
+    # Back button
+    if st.button("← Back to Appointments", key="back_to_appointments"):
+        st.session_state.reschedule_mode = False
+        if 'appointment_to_reschedule' in st.session_state:
+            del st.session_state.appointment_to_reschedule
+        st.rerun()
+    
+    # Display current appointment details
+    st.subheader("Current Appointment Details")
+    
+    st.markdown(f"""
+    <div style="background-color: #f3f4f6; padding: 15px; border-radius: 10px; margin-bottom: 20px;">
+        <p><strong>Doctor:</strong> {appointment['doctor_name']} ({appointment.get('specialization', 'Specialist')})</p>
+        <p><strong>Date:</strong> {appointment['appt_date']}</p>
+        <p><strong>Time:</strong> {appointment['appt_time']}</p>
+        <p><strong>Reason:</strong> {appointment.get('reason', 'Consultation')}</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Get doctor's ID
+    conn = get_db_connection()
+    if not conn:
+        st.error("Database connection failed")
+        return
+    
+    cursor = conn.cursor(dictionary=True)
+    try:
+        cursor.execute("""
+            SELECT doctor_id
+            FROM appointments
+            WHERE appointment_id = %s
+        """, (appointment['appointment_id'],))
+        
+        result = cursor.fetchone()
+        if not result:
+            st.error("Could not retrieve appointment details")
+            cursor.close()
+            conn.close()
+            return
+        
+        doctor_id = result['doctor_id']
+        cursor.close()
+    except Exception as e:
+        st.error(f"Error retrieving doctor details: {e}")
+        cursor.close()
+        conn.close()
+        return
+    
+    # New appointment selection
+    st.subheader("New Appointment Details")
+    
+    # Date selection
+    min_date = datetime.now().date() + timedelta(days=1)  # Start from tomorrow
+    max_date = datetime.now().date() + timedelta(days=60)  # Allow booking up to 60 days ahead
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        new_date = st.date_input(
+            "Select a new date",
+            min_value=min_date,
+            max_value=max_date,
+            value=min_date
+        )
+    
+    # Get available time slots for this doctor on the selected date
+    available_slots = generate_available_slots(doctor_id, new_date, patient_id)
+    
+    # Remove slots that conflict with the doctor's existing appointments
+    # except the current appointment being rescheduled
+    cursor = conn.cursor(dictionary=True)
+    try:
+        cursor.execute("""
+            SELECT appointment_date
+            FROM appointments
+            WHERE doctor_id = %s 
+            AND DATE(appointment_date) = %s
+            AND status IN ('Scheduled', 'Confirmed', 'Rescheduled')
+            AND appointment_id != %s
+        """, (doctor_id, new_date, appointment['appointment_id']))
+        
+        booked_slots = cursor.fetchall()
+        booked_times = [slot['appointment_date'].strftime('%H:%M') for slot in booked_slots]
+        
+        # Convert datetime objects to formatted strings for comparison
+        formatted_available_slots = []
+        datetime_slots = []
+        
+        for slot in available_slots:
+            formatted_time = slot.strftime('%H:%M')
+            if formatted_time not in booked_times:
+                formatted_available_slots.append(slot.strftime('%I:%M %p'))
+                datetime_slots.append(slot)
+        
+        # Check if the patient has other appointments on this date
+        cursor.execute("""
+            SELECT appointment_date
+            FROM appointments
+            WHERE patient_id = %s 
+            AND DATE(appointment_date) = %s
+            AND status IN ('Scheduled', 'Confirmed', 'Rescheduled')
+            AND appointment_id != %s
+        """, (patient_id, new_date, appointment['appointment_id']))
+        
+        patient_booked_slots = cursor.fetchall()
+        patient_booked_times = [slot['appointment_date'].strftime('%H:%M') for slot in patient_booked_slots]
+        
+        # Filter out times where the patient already has appointments
+        final_formatted_slots = []
+        final_datetime_slots = []
+        
+        for i, formatted_time in enumerate(formatted_available_slots):
+            time_24h = datetime_slots[i].strftime('%H:%M')
+            if time_24h not in patient_booked_times:
+                final_formatted_slots.append(formatted_time)
+                final_datetime_slots.append(datetime_slots[i])
+        
+        # Store both the formatted strings and datetime objects
+        st.session_state.available_formatted_slots = final_formatted_slots
+        st.session_state.available_datetime_slots = final_datetime_slots
+        
+        cursor.close()
+        conn.close()
+    except Exception as e:
+        st.error(f"Error checking appointment conflicts: {e}")
+        cursor.close()
+        conn.close()
+        return
+    
+    with col2:
+        if not hasattr(st.session_state, 'available_formatted_slots') or not st.session_state.available_formatted_slots:
+            st.warning("No available time slots on this date. Please select another date.")
+            new_time = None
+        else:
+            new_time = st.selectbox(
+                "Select a new time",
+                options=st.session_state.available_formatted_slots
+            )
+    
+    # Allow adding a reason for rescheduling
+    reschedule_reason = st.text_area(
+        "Reason for rescheduling (optional)",
+        placeholder="Please provide a reason for rescheduling your appointment..."
+    )
+    
+    # Only show the confirm button if there are available slots
+    if hasattr(st.session_state, 'available_formatted_slots') and st.session_state.available_formatted_slots:
+        if st.button("Confirm Reschedule", type="primary", use_container_width=True):
+            # Find the corresponding datetime object for the selected time
+            selected_index = st.session_state.available_formatted_slots.index(new_time)
+            combined_datetime = st.session_state.available_datetime_slots[selected_index]
+            
+            # Check for any conflicts with other doctors (final check before committing)
+            conn = get_db_connection()
+            if not conn:
+                st.error("Database connection failed")
+                return
+            
+            cursor = conn.cursor(dictionary=True)
+            try:
+                # Check if the patient has any other appointments at the same time with different doctors
+                slot_start = combined_datetime
+                slot_end = slot_start + timedelta(minutes=30)
+                
+                cursor.execute("""
+                    SELECT a.appointment_id, a.appointment_date, d.full_name as doctor_name
+                    FROM appointments a
+                    JOIN doctors d ON a.doctor_id = d.doctor_id
+                    WHERE a.patient_id = %s 
+                    AND a.appointment_id != %s
+                    AND a.status IN ('Scheduled', 'Confirmed', 'Rescheduled')
+                    AND a.appointment_date BETWEEN %s AND %s
+                """, (patient_id, appointment['appointment_id'], slot_start - timedelta(minutes=29), slot_end))
+                
+                conflicting_appointments = cursor.fetchall()
+                cursor.close()
+                conn.close()
+                
+                if conflicting_appointments:
+                    # Patient already has another appointment at this time
+                    conflict = conflicting_appointments[0]
+                    conflict_time = conflict['appointment_date'].strftime('%I:%M %p')
+                    conflict_doctor = conflict['doctor_name']
+                    
+                    st.error(f"""
+                    This time conflicts with your existing appointment with Dr. {conflict_doctor} at {conflict_time}.
+                    Please select a different time or cancel your other appointment first.
+                    """)
+                    return
+                
+                # No conflicts found, proceed with rescheduling
+                result = reschedule_appointment(
+                    appointment['appointment_id'], 
+                    combined_datetime,
+                    None,
+                    reschedule_reason
+                )
+                
+                if result:
+                    st.success("Your appointment has been successfully rescheduled!")
+                    
+                    # Show confirmation 
+                    st.markdown(f"""
+                    <div style="background-color: #ecfdf5; padding: 20px; border-radius: 10px; border-left: 5px solid #10b981; margin-top: 20px;">
+                        <h3 style="color: #10b981;">Appointment Rescheduled</h3>
+                        <p><strong>Doctor:</strong> {appointment['doctor_name']}</p>
+                        <p><strong>New Date:</strong> {new_date.strftime('%A, %B %d, %Y')}</p>
+                        <p><strong>New Time:</strong> {new_time}</p>
+                        <p>You will receive a confirmation email shortly.</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    # Add a return button
+                    if st.button("Return to Appointments", use_container_width=True):
+                        st.session_state.reschedule_mode = False
+                        if 'appointment_to_reschedule' in st.session_state:
+                            del st.session_state.appointment_to_reschedule
+                        st.rerun()
+                else:
+                    st.error("Failed to reschedule appointment. Please try again later.")
+            except Exception as e:
+                st.error(f"Error rescheduling appointment: {e}")
+    else:
+        st.error("Please select a date with available time slots to continue.")
+
+def reschedule_appointment(appointment_id, new_datetime, new_time=None, reason=None):
+    """Reschedule an existing appointment"""
+    conn = get_db_connection()
+    if not conn:
+        st.error("Database connection failed")
+        return False
+    
+    cursor = conn.cursor()
+    try:
+        # Update the appointment with new date and time
+        if reason:
+            # Append the reschedule reason to the existing reason field instead of trying to use notes
+            cursor.execute("""
+                UPDATE appointments
+                SET appointment_date = %s, 
+                    status = 'Rescheduled',
+                    reason = CONCAT(IFNULL(reason, ''), '\nRescheduled on ', %s, ': ', %s)
+                WHERE appointment_id = %s
+            """, (new_datetime, datetime.now().strftime('%Y-%m-%d'), reason, appointment_id))
+        else:
+            cursor.execute("""
+                UPDATE appointments
+                SET appointment_date = %s, 
+                    status = 'Rescheduled'
+                WHERE appointment_id = %s
+            """, (new_datetime, appointment_id))
+        
+        conn.commit()
+        success = cursor.rowcount > 0
+        cursor.close()
+        conn.close()
+        return success
+    except Exception as e:
+        st.error(f"Error rescheduling appointment: {e}")
         cursor.close()
         conn.close()
         return False
