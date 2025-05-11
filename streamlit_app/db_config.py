@@ -5,11 +5,11 @@ from pathlib import Path
 
 # Default database configuration
 DEFAULT_DB_CONFIG = {
-    "host": "sql.freedb.tech",
+    "host": "clinexa.cgpek8igovya.us-east-1.rds.amazonaws.com",
     "port": 3306,
-    "user": "freedb_clinexa",
-    "password": "PJ%g2KQX&J7vW*4",
-    "database": "freedb_clinexa"
+    "user": "clinexa",
+    "password": "Am24268934",
+    "database": "clinexa"
 }
 
 def get_db_config():
