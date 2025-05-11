@@ -9,7 +9,7 @@ DEFAULT_DB_CONFIG = {
     "port": 3306,
     "user": "clinexa",
     "password": "Am24268934",
-    "database": "clinexa"
+    "database": "clinexa_db"
 }
 
 def get_db_config():
