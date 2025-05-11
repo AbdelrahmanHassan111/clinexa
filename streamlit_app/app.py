@@ -14,11 +14,11 @@ from patient_portal import patient_portal
 
     # Fallback configuration if db_config.py is not available
 DB_CONFIG = {
-    "host": st.secrets["connections"]["mysql"]["host"],
-    "port": 3306,
-    "user": st.secrets["connections"]["mysql"]["username"],
-    "password": st.secrets["connections"]["mysql"]["password"],
-    "database": st.secrets["connections"]["mysql"]["database"]
+    "host": st.secrets["host"],
+    "port": st.secrets["port"],
+    "user": st.secrets["username"],
+    "password": st.secrets["password"],
+    "database": st.secrets["database"]
 }
 def get_db_connection():
     """Create a direct database connection."""
