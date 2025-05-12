@@ -6,10 +6,11 @@ import time
 
 # Database connection parameters
 DB_CONFIG = {
-    "host": "localhost",
-    "user": "root",
-    "password": "root",
-    "database": "smart_clinic"
+   "host": st.secrets["host"],
+    "port": st.secrets["port"],
+    "user": st.secrets["username"],
+    "password": st.secrets["password"],
+    "database": st.secrets["database"]
 }
 
 def get_db_connection():
